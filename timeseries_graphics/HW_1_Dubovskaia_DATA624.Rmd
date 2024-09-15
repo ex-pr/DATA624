@@ -1,0 +1,465 @@
+---
+title: 'Homework 1. Time series graphics'
+author: 'Daria Dubovskaia'
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    theme: united
+    code_folding: show
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+#chunks
+knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+#libraries
+library(tidyverse)
+library(fpp3)
+library(readxl)
+#random seed
+set.seed(42)
+```
+
+## Exercise 2.1
+**Explore the following four time series: Bricks from aus_production, Lynx from pelt, Close from gafa_stock, Demand from vic_elec.**
+
+We loaded the relevant datasets in R to examine the time series data, and used the help() or? functions to obtain comprehensive details about each series. 
+
+```{r head_data}
+#Check first 5 rows of the data
+head(aus_production)
+head(pelt)
+head(gafa_stock)
+head(vic_elec)
+```
+
+### a. Use ? (or help()) to find out about the data in each series.
+
+*aus_production*: a half-hourly tsibble with 218 observations of six variables. Estimates published quarterly for a few chosen manufacturing production metrics in Australia.
+
+*pelt*: an annual tsibble with 91 observations of three variables. Trading data for Canadian lynx furs and snowshoe hares from 1845 to 1935 kept by the Hudson Bay Company.
+
+*gafa_stock*: a tsibble containing data on irregular trading days with 5032 observations of 8 variables. Historical Google, Amazon, Facebook, and Apple stock values from 2014 to 2018 (pricing is in USD).
+
+*vic_elec*: a half-hourly tsibble with 52608 observations of five values.This data relates to operational demand (the amount of demand satisfied by generation imports into the area as well as locally scheduled, semi-scheduled, and non-scheduled intermittent generating units with an aggregate capacity more than 30 MWh).
+```{r help_data}
+#Learn details about the data
+help(aus_production)
+help(pelt)
+?gafa_stock
+?vic_elec
+```
+
+### b. What is the time interval of each series?
+
+**Bricks, aus_production** (clay brick production in millions of bricks): every quarter (every 3 months).
+
+**Lynx, pelt** (the number of Canadian Lynx pelts traded): annually.
+
+**close, gafa_stock** (the closing price for the stock): daily.
+
+**Demand, vic_elec** (total electricity demand in MWh): half-hourly.
+
+
+### c. Use autoplot() to produce a time plot of each series.
+
+Quarterly production of bricks plot shows the quarterly production of bricks manufactured since 1956. The graph would typically show seasonal trends caused by economic factors influencing construction demand, such as booms and recessions. 
+
+Annual lynx pelt numbers graph shows the number of lynx pelts captured each year beginning in the mid-19th century. The plot can reveal ecological cycles.
+
+Daily closing stock price graph depicts the daily closing prices of stocks over time. We can see a clear picture of the stock's price fluctuations on a daily basis. Sharp spikes or drops could be linked to market events, product launches, or financial reports.
+
+Half-hour electricity demand in Victoria plot depicts half-hourly electricity demand in Victoria during a specific period in 2012. It shows peak load times during the day, which are frequently found in the morning and late afternoon. 
+
+```{r autoplots}
+#Time plot for Bricks, aus_production, quarterly
+autoplot(aus_production, Bricks) +
+   ggtitle("Brick Production Over Time") #+
+#  xlab("Quarter") +
+#  ylab("Bricks Produced (Millions)")
+
+#Time plot for Lynx, pelt, annually
+autoplot(pelt, Lynx) +
+   ggtitle("Lynx Pelts Over Time") #+
+#  xlab("Year") +
+#  ylab("Number of Lynx Pelts")
+
+#Time plot for Close, gafa_stock, daily
+autoplot(gafa_stock, Close) +
+   ggtitle("GAFA stock prices daily") #+
+#  xlab("Date") +
+#  ylab("Closing Price")
+
+#Time plot for Demand, vic_elec, half-hourly
+autoplot(vic_elec, Demand)
+```
+
+
+### d. For the last plot, modify the axis labels and title.
+
+Each plot accurately represents the time intervals, and for the final plot, we customized the axis labels and title.
+
+```{r}
+#Time plot for Demand, vic_elec, half-hourly
+autoplot(vic_elec, Demand) +
+  ggtitle("Half-hourly electricity demand for Victoria") +
+  xlab("Time") +
+  ylab("Electricity Demand (MW)")
+```
+
+## Exercise 2.2 
+**Use filter() to find what days corresponded to the peak closing price for each of the four stocks in gafa_stock.**
+
+The dates when each of the four stocks in the GAFA dataset (Google, Apple, Facebook, and Amazon) reached their peak closing prices:
+
+**Google (GOOG)**: July 26, 2018,  peak closing price is $1268.33.
+
+**Amazon (AMZN)**: September 4, 2018, peak closing price is $2039.51.
+
+**Facebook (FB)**: July 25, 2018, peak closing price is $217.50.
+
+**Apple (AAPL)**: October 3, 2018, peak closing price is $232.07.
+
+```{r filter_gafa_peak}
+gafa_stock %>%
+  group_by(Symbol) %>%
+  filter(Close == max(Close)) %>%
+  ungroup()
+```
+
+## Exercise 2.3 
+**Download the file tute1.csv from the book website, open it in Excel (or some other spreadsheet application), and review its contents. You should find four columns of information. Columns B through D each contain a quarterly series, labelled Sales, AdBudget and GDP. Sales contains the quarterly sales for a small company over the period 1981-2005. AdBudget is the advertising budget and GDP is the gross domestic product. All series have been adjusted for inflation.**
+
+There are four columns in the file tute1.csv. It covers the years 1981 to 2005 and provides economic and company-specific financial metrics every quarter:
+
+Quarter - the quarterly period for each entry, beginning in March 1981.
+
+Sales - a small company's quarterly sales adjusted for inflation.
+
+AdBudget- the advertising budgets for the same quarters, adjusted for inflation.
+
+GDP - the gross domestic product for each quarter, adjusted for inflation.
+
+```{r tute_data}
+#Read data from Github
+tute1 <- read.csv("https://raw.githubusercontent.com/ex-pr/DATA624/main/timeseries_graphics/tute1.csv")
+View(tute1)
+
+#Convert the data to time series
+mytimeseries <- tute1 %>%
+  mutate(Quarter = yearquarter(Quarter)) %>%
+  as_tsibble(index = Quarter)
+
+#Construct time series plots of each of the three series
+mytimeseries %>%
+  pivot_longer(-Quarter) %>%
+  ggplot(aes(x = Quarter, y = value, colour = name)) +
+  geom_line() +
+  facet_grid(name ~ ., scales = "free_y")
+```
+
+### a. Check what happens when you don’t include facet_grid().
+
+facet_grid() helps to generate a multi-panel plot. In our case, the AdBudget, GDP, and Sales series were plotted in different panels. This division facilitates pattern comparison within each series independently of the scales of the other series.
+
+Once we remove facet_grid(), all series are plotted in the same graph region, overlaying them on a single coordinate system. This arrangement may help mto compare the series directly on the same axes. However, if the series have different scales or units, it can also make the plot more jumbled and more difficult to read.
+
+```{r no_facet_grid}
+#Remove facet_grid() from the previous plot
+mytimeseries %>%
+  pivot_longer(-Quarter) %>%
+  ggplot(aes(x = Quarter, y = value, colour = name)) +
+  geom_line()
+```
+
+
+## Exercise 2.4 
+**The USgas package contains data on the demand for natural gas in the US.**
+
+The dataset offers data on the annual natural gas consumption in the United States from 1949 to 2019 at both the aggregate and state levels. There are three variables:
+
+Year - an integer representing the observation year;
+
+State - a character, the US state indicator;
+
+y - an integer representing the combined annual natural gas consumption of all US states (in million cubic feet).
+
+### a. Install the USgas package.
+
+```{r install_usgas}
+#Install and use USgas library
+#install.packages('USgas')
+library(USgas)
+```
+
+### b. Create a tsibble from us_total with year as the index and state as the key.
+
+as_tsibble() function creates a time series tibble, which helps to manage and evaluate time series data in an organized manner.
+
+index is the column in the dataset that represents the time index.
+
+Key specifies the dataset's grouping or panel identifier, enabling the handling of multiple time series at once.
+
+```{r usgas_tibble}
+#Transform to tsibble
+usgas_series <- as_tsibble(us_total, index = year, key = state)
+```
+
+### c. Plot the annual natural gas consumption by state for the New England area (comprising the states of Maine, Vermont, New Hampshire, Massachusetts, Connecticut and Rhode Island).
+
+The graph shows the trends in natural gas consumption in the New England region by state up to 2019. 
+
+The two states with the highest energy consumption are Connecticut and Massachusetts; over time, Massachusetts has seen a notable increase in energy consumption, which may be related to increased industrial activity or population growth.
+
+Maine and New Hampshire demonstrate stable and reduced levels of consumption, indicating a reduction in demand or effective use of alternative energy sources.
+
+Vermont and Rhode Island use less natural gas than other states, which may be due to their smaller populations or higher reliance on renewable energy sources.
+
+```{r plot_gas}
+#Filter New England states
+new_england <- c("Maine", "Vermont", "New Hampshire", "Massachusetts", "Connecticut", "Rhode Island")
+new_england_data <- usgas_series %>% 
+  filter(state %in% new_england)
+
+#Plot filtered data for the New England area
+ggplot(new_england_data, aes(x = year, y = y, color = state)) +
+  geom_line() +
+  labs(title = "Natural Gas Consumption by State in New England area",
+       x = "Year",
+       y = "Natural Gas Consumption (million cubic feet)") +
+  facet_grid(state ~., scales = "free_y")
+```
+
+
+## Exercise 2.5 
+**Download tourism.xlsx from the book website and read it into R using readxl::read_excel().**
+
+### a. Create a tsibble which is identical to the tourism tsibble from the tsibble package.
+
+The tourism tsibble from the tsibble package contains the quarterly overnight trips from 1998 Q1 to 2016 Q4 across Australia.
+
+There are five variables and 23,408 rows:
+
+Quarter: Quarter of the year (index);
+
+Region: The tourism regions are formed through the aggregation of Statistical Local Areas (SLAs) which are defined by the various State and Territory tourism authorities according to their research and marketing needs;
+
+State: Australian states and territories;
+
+Goal: The purpose of the stopover visit (Holiday, Visiting friends and relatives, Business, Other reason);
+
+Journeys: Thousands of overnight journeys.
+
+
+```{r create_tourism}
+#Load xlsx file
+tourism_data <- readxl::read_excel("C:/Users/daria/Downloads/tourism.xlsx")
+
+#Create tsibble
+tourism_tsibble <- tourism_data %>% 
+  mutate(Quarter = yearquarter(Quarter)) %>% 
+  as_tsibble(index = Quarter, key = c(Region, State, Purpose))
+
+#Check the data
+head(tourism_tsibble)
+head(tourism)
+
+#Compare tsibbles
+
+all.equal(tourism_tsibble, tourism)
+```
+
+### b. Find what combination of Region and Purpose had the maximum number of overnight trips on average.
+
+Melbourne and Visiting had the highest average number of overnight trips. This means that, of all the regions and purposes examined, Melbourne was the most popular destination specifically for the purpose of visiting, making it the leading combination in terms of overnight trips on average.
+
+```{r max_trips}
+#The average number of overnight trips for each combination of Region and Purpose
+tourism_tsibble %>%
+  group_by(Region, Purpose) %>%
+  summarise(AverageTrips = mean(Trips), .groups = "drop") %>%
+  filter(AverageTrips == max(AverageTrips)) #Region and Purpose with the maximum number of overnight trips on average
+```
+
+### c. Create a new tsibble which combines the Purposes and Regions, and just has total trips by State.
+
+This will generate a new tsibble with each row representing a state and its total trips, combining all purposes and regions.
+
+```{r new_tsibble}
+tourism_tsibble_by_state <- tourism_tsibble %>%
+  group_by(State) %>%
+  summarise(TotalTrips = sum(Trips), .groups = "drop")
+
+head(tourism_tsibble_by_state)
+```
+
+## Exercise 2.8 
+**Use the following graphics functions: autoplot(), gg_season(), gg_subseries(), gg_lag(), ACF() and explore features from the following time series: “Total Private” Employed from us_employment, Bricks from aus_production, Hare from pelt, “H02” Cost from PBS, and Barrels from us_gasoline.**
+
+```{r}
+#“Total Private” Employed from us_employment
+total_private <- us_employment %>% 
+        filter(Title == "Total Private")
+
+autoplot(total_private, Employed) +
+  ggtitle("“Total Private” Employed in the US: Trend and Seasonality")
+
+gg_season(total_private, Employed) +
+  ggtitle("Seasonality in Private Employment in the US")
+
+gg_subseries(total_private, Employed) +
+  ggtitle("Subseries Plot for Private Employment in the US")
+
+gg_lag(total_private, Employed) +
+  ggtitle("Lag Plot for Private Employment in the US")
+
+ACF(total_private, Employed) %>%
+  autoplot() +
+  ggtitle("ACF for Private Employment in the US")
+
+ACF(total_private, Employed)
+```
+
+```{r aus_production}
+#Bricks from aus_production
+autoplot(aus_production, Bricks) +
+  ggtitle("Bricks Production in Australia: Trend and Seasonality")
+
+gg_season(aus_production, Bricks) +
+  ggtitle("Seasonality in Bricks Production")
+
+gg_subseries(aus_production, Bricks) +
+  ggtitle("Subseries Plot for Bricks Production")
+
+gg_lag(aus_production, Bricks) +
+  ggtitle("Lag Plot for Bricks Production")
+
+ACF(aus_production, Bricks) %>%
+  autoplot() +
+  ggtitle("ACF for Bricks Production")
+
+ACF(aus_production, Bricks)
+```
+
+```{r pelt}
+#Hare from pelt
+autoplot(pelt, Hare) +
+  ggtitle("Hare Pelts: Trend and Seasonality")
+
+#gg_season(pelt, Hare) +
+  #ggtitle("Seasonality in Hare Pelts")
+
+gg_subseries(pelt, Hare) +
+  ggtitle("Subseries Plot for Hare Pelts")
+
+gg_lag(pelt, Hare) +
+  ggtitle("Lag Plot for Hare Pelts")
+
+ACF(pelt, Hare) %>%
+  autoplot() +
+  ggtitle("ACF for Hare Pelts")
+
+ACF(pelt, Hare)
+```
+
+```{r pbs}
+#Filter HO2 cost
+h02_cost <- PBS %>% filter(ATC2 == "H02") 
+
+#H02 Cost from PBS
+autoplot(h02_cost, Cost) +
+  ggtitle("H02 Costs: Trend and Seasonality")
+
+gg_season(h02_cost, Cost) +
+  ggtitle("Seasonality in H02 Costs")
+
+gg_subseries(h02_cost, Cost) +
+  ggtitle("Subseries Plot for H02 Costs")
+
+#gg_lag(h02_cost, Cost) +
+  #ggtitle("Lag Plot for H02 Costs")
+
+ACF(h02_cost, Cost) %>%
+  autoplot() +
+  ggtitle("ACF for H02 Costs")
+
+ACF(h02_cost, Cost)
+```
+
+```{r us_gasoline}
+#Barrels from us_gasoline
+autoplot(us_gasoline, Barrels) +
+  ggtitle("Gasoline Barrels in the US: Trend and Seasonality")
+
+gg_season(us_gasoline, Barrels) +
+  ggtitle("Seasonality in Gasoline Barrels")
+
+gg_subseries(us_gasoline, Barrels) +
+  ggtitle("Subseries Plot for Gasoline Barrels")
+
+gg_lag(us_gasoline, Barrels) +
+  ggtitle("Lag Plot for Gasoline Barrels")
+
+ACF(us_gasoline, Barrels) %>%
+  autoplot() +
+  ggtitle("ACF for Gasoline Barrels")
+
+ACF(us_gasoline, Barrels)
+```
+
+### a. Can you spot any seasonality, cyclicity and trend?
+
+### b. What do you learn about the series?
+
+### c. What can you say about the seasonal patterns?
+
+### d. Can you identify any unusual years?
+
+- **Employment in the private sector in the US** has been increasing in the US over the past few decades. It could be due to the private sector's long-term growth and economic expansion. 
+
+There is a discernible seasonal pattern for private employment, with higher employment in summer months—especially in June and July, and slight decreases in other months toward the end of the year. 
+
+Cyclical behavior is observable over extended periods of time, and it exhibits discernible declines during economic downturns or recessions (such as the decline in the early 1980s and the 2008 financial crisis both stand out). There has been a noticeable upward trend over the years, which is a result of a long-term growth in employment in the private sector.
+
+There were notable declines in employment during the early 1980s recession and the 2008 financial crisis. These are notable years where employment did not follow the normal trend.
+
+- The plots for **bricks Production in Australia** display patterns of seasonal production, with Q2 and Q3 appearing to be the highest quarters for brick production. 
+
+There are discernible cyclical peaks and troughs, probably as a result of demands from the construction sector. 
+
+In general, the trend indicates growth until the 1980s, when it experienced a period of instability and decline. Production then levels off and stabilizes. 
+
+The notable decline between 1980 and 1982 might point to a business-related or economic event that lowered output.
+
+- The data for **hare pelts** indicates a highly cyclical nature, but there is no discernible seasonal pattern. 
+
+Strong cyclical patterns with abrupt increases and decreases over several-year timeframes are indicative of the hare population dynamics.
+
+There isn't a clear long-term trend, although cycles seem to be getting softer with time. 
+
+Unusual population fluctuations are indicated by the sharp peaks and valleys surrounding the 1860s and 1880s.
+
+- There is a noticeable strong seasonal trend in **H02 Costs (PBS)**, with costs clearly peaking in the middle of the year and falling toward the beginning.
+
+Although there are some minor cycles, seasonal behavior rather than longer-term cycles is what primarily drives the data.
+
+Costs exhibit a steady upward trend, especially between 1995 and 2005. 
+
+There are no dramatic outliers, but the overall upward trend indicates that costs have been rising, with peaks becoming more noticeable over time, particularly after 2000.
+
+- The weekly data on **gasoline barrels in the US** exhibits a definite seasonal pattern with peaks in the summer months and lower demand in the winter, most likely reflecting increased travel and transportation requirements during the summer.
+
+The cyclical component is faint. Over time, there have been variations in gasoline demand that may be related to economic factors. Specifically, during times of economic expansion, this demand has increased. 
+
+There has been a discernible upward trend in gasoline barrels over time, which suggests the increasing demand. But as the trend goes on, it flattens out a little bit, which could be an indication of market saturation or changes in energy consumption.
+
+There is a noticeable drop in gasoline barrels in 2008-2009, which is most likely due to the global financial crisis, which reduced travel and gasoline demand.
+
+Each series typically has a long-term trend (either upward or downward), regular seasonal patterns, and, on occasion, cyclical behavior. We have also experienced volatility and unusual years that reflect major events such as economic downturns, crises, or natural disasters.
+
+
