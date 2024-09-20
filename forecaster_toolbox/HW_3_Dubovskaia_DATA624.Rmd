@@ -1,0 +1,431 @@
+---
+title: "Homework 3. The forecaster’s toolbox"
+author: "Daria Dubovskaia"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: show
+editor_options:
+  chunk_output_type: console
+  markdown:
+    wrap: sentence
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+#chunks
+knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+#libraries
+library(tidyverse)
+library(fpp3)
+library(latex2exp)
+library(seasonal)
+#random seed
+set.seed(42)
+```
+
+
+## Exercise 5.1
+**Produce forecasts for the following series using whichever of NAIVE(y), SNAIVE(y) or RW(y ~ drift()) is more appropriate in each case:**
+
+- Australian Population (global_economy)
+
+There is a clear upward trend that lacks seasonality. As a result, we don't need to use the SNaive method which is ineffective due to the lack of discernible seasonal patterns. We also don't need to use the Naive model here as it projects the population's last observed value into the future, assuming no growth or change. We should use drift method for this data, which is a variation of the NAIVE method, to allow the forecasts to increase over time as we see an increasing trend in population of Australia over time. Forecasts with 80% and 95% confidence show the expected range of future values in prediction intervals (a range in which future values are expected to lie with matching degrees of confidence). The drift model implies for Australia’s population growth if the trend continues which corresponds with the trend of actual data.
+
+```{r aus_population}
+#Filter data
+aus_population <- global_economy %>%
+  filter(Country == "Australia") 
+
+aus_population_2007 <- aus_population %>%
+  filter(Year <= 2007) 
+
+#Check data
+head(aus_population_2007)
+
+#Plot population data over time
+autoplot(aus_population_2007, Population) +
+  labs(title = "Total Population in Australia, 1960-2007", x = "Year")
+
+#Build model and predict until 2027
+aus_population_2007 %>% 
+  model(RW(Population ~ drift()), `Naïve` = NAIVE(Population)) %>%
+  forecast(h = 10) %>%
+  autoplot(aus_population) +
+  labs(title = "Total Population in Australia with a forecast until 2017", x = "Year")
+```
+
+- Bricks (aus_production)
+
+There seems to be a strong seasonal patter, implying that seasonal methods like SNaive could be useful, particularly for capturing quarterly fluctuations. RW(y ~ drift()) wouldn't be useful since there is no strong directional trend after the early 1990s. However, if we were forecasting during the upward trend phase (prior to 1980), this method may have been more appropriate. Naive model is not suitable here as this method ignores seasonality and trends. The forecast follows the seasonal pattern, the intervals (80% and 95%) demonstrate a range of uncertainty that widens as we predict further into the future (it is expected in time series forecasting). The break in the plots is due to the missing values starting from the 3rd quarter of 2005.
+
+```{r aus_production_bricks}
+#Check data
+head(aus_production)
+
+#Choose data before 2006
+aus_production_2005 <- aus_production %>%
+  filter_index('1956 Q1' ~ '2005 Q2')
+
+#Plot bricks data over time
+autoplot(aus_production_2005, Bricks) +
+  labs(title = "Quarterly Brick Production in Australia, 1956 Q1 - 2005 Q2", x = "Quarter", y="Bricks Produced (Millions)")
+
+#Build model and predict until 2010 Q2
+aus_production_2005 %>% 
+  filter(!is.na(Bricks)) %>%
+  model(SNAIVE(Bricks)) %>%
+  forecast(h=20) %>%
+  autoplot(aus_production) +
+  labs(title = "Quarterly Brick Production in Australia with a forecast until 2010 Q2", x = "Year") 
+```
+
+- NSW Lambs (aus_livestock)
+
+There is a noticeable pattern but no discernible seasonal trend. The data appears to have fluctuated over time, with a decline in the mid-1980s and an upward trend beginning in the late 1990s, but no significant seasonality is evident. A decomposition shows that, while some seasonality exists, it is relatively weak, the trend component exhibits both downward and upward movements, indicating that the long-term direction remains uncertain. Given the uncertainty in the trend, the drift method is the best option here, it does not assume a fixed direction The drift method provides a more reliable forecast than the Naive or SNaive methods because it accounts for long-term fluctuations in the data. The Naive method simplifies the forecast by assuming no change, whereas the SNaive method emphasizes the weak seasonal component. The intervals (80% and 95%) demonstrate a range of uncertainty that widens as we predict further into the future.
+
+```{r aus_livestock_lambs}
+#Filter data
+nsw_lambs <- aus_livestock %>%
+  filter(Animal == "Lambs") %>%
+  filter(State == "New South Wales")
+
+#Check data
+head(nsw_lambs)
+
+#Plot lambs data over time
+autoplot(nsw_lambs, Count) +
+  labs(title = "Monthly Number of lambs slaughtered in New South Wales, Jul 1972 - Dec 2018", x = "Month", y="Number of lambs")
+
+#Filter training data and forecast data
+nsw_lambs_2015 <- nsw_lambs %>%
+  filter(year(Month) <= 2015)
+
+nsw_lambs_2018 <- nsw_lambs %>%
+  filter(year(Month) > 2015)
+
+nsw_lambs_2010 <- nsw_lambs %>%
+  filter(year(Month) > 2010)
+
+#Check for trend and seasonality
+decomposition <- nsw_lambs  %>%
+  model(STL(Count ~ season(window = "periodic"))) %>%
+  components()
+
+# Plot the decomposition
+autoplot(decomposition) + 
+  labs(title = "Decomposition of lambs slaughtered Count")
+
+#Build model and predict until 2018 Dec
+nsw_lambs_2015 %>% 
+  model(RW(Count ~ drift())) %>%
+  forecast(nsw_lambs_2018) %>%
+  autoplot(nsw_lambs_2010) +
+  labs(title = "Monthly Number of lambs slaughtered in New South Wales with a forecast until 2018 Dec", x = "Year") 
+```
+
+
+- Household wealth (hh_budget)
+
+When we examine household wealth in Australia from 1995 to 2018, we see the overall trend has been upward Given the lack of strong seasonality and visible trend, the drift method is best suited here. The Naive method simplifies the forecast by assuming no change, whereas the SNaive method emphasizes the weak seasonal component. The drift model assumes that current trends continue. The forecast results, which include 80% and 95% confidence intervals, highlight the expected range of future values while allowing for some uncertainty in future predictions. Australian wealth increased steadily from 1995, with only a slight dip in recent years, the forecast indicates that the gradual increase will continue. For Canada, the plot shows a more fluctuating pattern, the forecast predicts a moderate increase, but the wider confidence intervals show significant uncertainty. Japan's wealth has moderate growth, the forecast suggests that this upward trend will continue, with the 80% confidence interval being close to the forecasted line, there is a higher confidence than in other countries. The United States has experienced more pronounced fluctuations in wealth over time, the forecast indicates potential growth, but the wide confidence intervals reflect uncertainty.
+
+```{r hh_budget}
+
+#Check data
+head(hh_budget)
+
+#Filter training data and forecast data
+hh_budget_2010 <- hh_budget %>%
+  filter(Year <= 2010) 
+
+hh_budget_2016 <- hh_budget %>%
+  filter(Year > 2010) 
+
+#Plot household wealth data over time
+autoplot(hh_budget, Wealth) +
+  labs(title = "Annual Wealth as a percentage of net disposable income for Australia, Japan, Canada and USA, 1995-2016", x = "Year", y = "Wealth, %") 
+
+#Build model and predict until 2016
+hh_budget_2010 %>% 
+  model(RW(Wealth ~ drift())) %>%
+  forecast(hh_budget_2016 ) %>%
+  autoplot(hh_budget) +
+ labs(title = "Annual Wealth as a percentage of net disposable income for Australia, Japan, Canada and USA with a forecast until 2016", x = "Year") 
+```
+
+- Australian takeaway food turnover (aus_retail)
+
+We chose Victoria state for the analysis. The plot of the time series reveals a significant seasonal component with consistent patterns observed, there has been a long-term upward trend, particularly since the early 2000s, fueled by increased demand for takeaway food services. Given the strong seasonality and clear trend, the SNaive method is the best option here. The Naive or drift methods ignore seasonality or fail to capture the data's periodic nature. The SNaive method captures both the upward trend and recurring seasonal spikes. The plot with forecast results shows that confidence intervals widen, indicating increased uncertainty. The model assumes that both seasonal patterns and the long-term growth trend will persist, as it shown by the forecast line.
+
+```{r aus_turnover}
+#Filter data
+aus_turnover <- aus_retail %>%
+  filter(Industry == "Takeaway food services") %>%
+  filter(State == "Victoria")
+
+#Check data
+head(aus_turnover)
+
+#Filter training data and forecast data
+aus_turnover_2010 <- aus_turnover %>%
+  filter(year(Month) <= 2010) 
+
+aus_turnover_2018 <- aus_turnover %>%
+  filter(year(Month) > 2010) 
+
+#Plot Australian takeaway food turnover data over time
+autoplot(aus_turnover, Turnover) +
+  labs(title = "Monthly Australian takeaway food turnover, 1982 Apr - 2018 Dec", x = "Month", y = "Turnover, million AUD") +
+  facet_wrap(~State, scales = "free")
+
+#Build model and predict until 2018
+aus_turnover_2010 %>% 
+  model(SNAIVE(Turnover)) %>%
+  forecast(aus_turnover_2018) %>%
+  autoplot(aus_turnover) +
+ labs(title = "Monthly Australian takeaway food turnover with a forecast until 2018", x = "Year") +
+  facet_wrap(~State, scales = "free")
+```
+
+## Exercise 5.2
+**Use the Facebook stock price (data set gafa_stock) to do the following:**
+
+- Produce a time plot of the series.
+
+gafa_stock is a tsibble containing data on irregular trading days. As a result, we should reset the index from calendar days to trading days. We use the code example from the textbook which produced a forecast for Google stock price data. We next filtered the stock data to concentrate on Facebook going forward from 2015. From less than 80 USD in early 2015, Facebook's stock price steadily increased; it peaked above 110 USD then started to drop toward the end of the period. 
+
+```{r fb_stock_plot}
+# Re-index based on trading days
+fb_stock <- gafa_stock |>
+  filter(Symbol == "FB", year(Date) >= 2015) |>
+  mutate(day = row_number()) |>
+  update_tsibble(index = day, regular = TRUE)
+
+# Filter the year of interest
+fb_stock_2015 <- fb_stock |> filter(year(Date) == 2015)
+
+head(fb_stock)
+
+# Plot Facebook stock price data over time
+fb_stock %>%
+  autoplot(Close) +
+  labs(title = "Facebook daily closing stock prices, 2015", x = "Date", y = "Closing price, $") 
+```
+
+
+- Produce forecasts using the drift method and plot them.
+
+Using the drift approach, the stock will rise or fall at a constant rate depending on past trends. We project the closing prices for January 2016 by fitting the drift model using 2015 data. The actual stock prices are shown alongside the forecast, so offering a clear comparison between the expected and recorded values. This lets us evaluate the drift model's performance in predicting next stock prices.
+
+```{r forecast_fb_stock}
+# Fit the models
+fb_stock_fit <- fb_stock_2015 |>
+  model(
+    Drift = RW(Close ~ drift())
+  )
+
+# Produce forecasts for the trading days in January 2016
+fb_stock_jan2016 <- fb_stock |>
+  filter(yearmonth(Date) == yearmonth("2016 Jan"))
+fb_stock_fc <- fb_stock_fit |>
+  forecast(new_data = fb_stock_jan2016)
+
+# Plot the forecasts
+fb_stock_fc |>
+  autoplot(fb_stock_2015) +
+  autolayer(fb_stock_jan2016, Close, colour = "black") +
+  labs(y = "$US",
+       title = "Facebook daily closing stock prices",
+       subtitle = "(Jan 2015 - Jan 2016)") +
+  guides(colour = guide_legend(title = "Forecast"))
+```
+
+- Show that the forecasts are identical to extending the line drawn between the first and last observations.
+
+The plot shows that the forecasts generated by the drift method are identical to a straight line drawn between the first and last stock price observations for 2015. 
+
+```{r plot_forecast_fb_stock}
+# Plot the forecasts with the line drawn between the first and last observations.
+fb_stock_fc |>
+  autoplot(fb_stock_2015) +
+  autolayer(fb_stock_jan2016, Close, colour = "black") +
+  annotate("segment", x = first(fb_stock_2015$day), y = first(fb_stock_2015$Close),
+           xend = last(fb_stock_2015$day), yend = last(fb_stock_2015$Close),
+           colour = "blue", linetype = "dashed") +
+  labs(y = "$US",
+       title = "Facebook daily closing stock prices",
+       subtitle = "(Jan 2015 - Jan 2016)") +
+  guides(colour = guide_legend(title = "Forecast"))
+```
+
+- Try using some of the other benchmark functions to forecast the same data set. Which do you think is best? Why?
+
+We used the drift method  and compared it to the Mean and Naive forecasting models. The SNAIVE model would be ineffective here due to its non-seasonal nature. Mean model assumes that the future stock price will be fixed at the average of all previous observations, this approach does not account for any upward or downward trends, making it unsuitable for time series data with a clear pattern or trend, such as Facebook's stock, which increased steadily throughout 2015. The Naive Method assumes that future stock prices will be the same as the last observed value in 2015. Although it is effective for short-term predictions, it does not capture the overall trend. The drift method captures the overall upward trend in Facebook's stock price over 2015, making it a more realistic model for this data set. The Drift model initially produces narrow intervals, but they expand over time. The Naïve and Mean models show larger ranges of uncertainty right away due to their simpler assumptions.
+
+```{r other_models}
+# Fit the models
+fb_stock_2015 %>%
+  model(Mean = MEAN(Close),
+        `Naïve` = NAIVE(Close),
+        Drift = RW(Close ~ drift())) %>%
+  forecast(new_data = fb_stock_jan2016) %>%
+  autoplot(fb_stock_2015) +
+  labs(title = "Daily Open Price of Facebook", y = "USD")
+
+```
+
+
+## Exercise 5.3
+**Apply a seasonal naïve method to the quarterly Australian beer production data from 1992. Check if the residuals look like white noise, and plot the forecasts. The following code will help. What do you conclude?**
+
+The top plot from the gg_tsresiduals() function shows us the evolution of innovation residuals over time. Even though the residuals oscillate around zero, there are some clusters and patterns. The bottom-right plot (ACF) shows us the residuals' autocorrelation function. If the residuals are white noise, the majority of the autocorrelation values should be within the confidence intervals, they will not be exactly equal to zero due to random variation. However, lag 4 exhibit significant autocorrelation, which means that the residuals are not completely random. The residuals' distribution on the bottom-right plot seems to be roughly symmetric, which means that there is no major bias in the residuals, but it does not completely confirm white noise because autocorrelation may still exist. We may conclude that the residuals are not purely white noise, this is supported by the Ljung-Box Test's p-value of 0.0000834 (it is significantly lower than the significance level of 0.05). This allows us to reject the null hypothesis that the residuals are white noise. The next plot shows predictions for beer production from the SNAIVE model. As we see, the predicted values seem to follow the same seasonal fluctuations as in the previous data with the 80% and 95% prediction intervals. But due to the residuals' behavior, the model may not be fully adequate for long-term forecasting.  As a result, while the SNAIVE model captures the seasonality well, a more complex model (e.g. ETS) should be used to better capture the underlying patterns in the data.
+
+```{r resid_aus_beer}
+# Extract data of interest
+recent_production <- aus_production |>
+  filter(year(Quarter) >= 1992)
+# Define and estimate a model
+fit <- recent_production |> model(SNAIVE(Beer))
+# Look at the residuals
+fit |> gg_tsresiduals() +
+  ggtitle("Residuals' plots, Australian beer producation")
+# Look a some forecasts
+fit |> forecast() |> autoplot(recent_production)
+
+#Ljung-Box Test, lag=2m for seasonal data, m=4 for our quaterly data
+augment(fit) |>  features(.innov, ljung_box, lag = 8)
+```
+
+## Exercise 5.4
+**Repeat the previous exercise using the Australian Exports series from global_economy and the Bricks series from aus_production. Use whichever of NAIVE() or SNAIVE() is more appropriate in each case.**
+
+The Australian Exports  series is annual data, which typically doesn't show the same type of consistent seasonality as monthly or quarterly data. Therefore, applying Naive (which assumes no seasonality) is more appropriate. The innovation residuals plot shows us that the residuals fluctuate around zero, which is a good sign. The ACF shows minor spike at lag 1, the rest of them don't exceed the critical value (the blue dashed lines). It means that the residuals look like white noise (the errors in our model are randomly distributed). The residuals are centered around zero in the histogram, and the distribution appears normal (the model's errors are unbiased). The Ljung-Box test gave a p-value of 0.0896 which is greater than the significance level of 0.05. Thus, we supported our conclusion about the residuals not showing significant autocorrelation (the errors are independent and look like white noise). The plot with predictions has a flat prediction for future exports. As the Naive method ignores trends and seasonality, it only projects the most recent observation into the future. When we predict further into the future, the confidence intervals widen to reflect the increasing uncertainty. As a result, the Naive model is appropriate here, and the diagnostics show that it performs well for the Australian Exports series.
+
+```{r model_aus_export}
+# Extract data of interest
+aus_export <- global_economy |>
+  filter(Country == "Australia") |>
+  select(Year, Exports)
+
+#Plot data
+autoplot(aus_export, Exports) +
+  ggtitle("Exports of goods and services from Australia, 1960-2017")
+
+
+# Define and estimate a model
+fit_export_naive <- aus_export |> model(NAIVE(Exports))
+
+# Look at the residuals
+fit_export_naive |> gg_tsresiduals() +
+  ggtitle("Residuals' plots, Australian Exports, NAIVE model")
+
+# Look a some forecasts
+fit_export_naive |> forecast() |> autoplot(aus_export) +
+  ggtitle("Exports of goods and services from Australia with a forecast, NAIVE model")
+
+#Ljung-Box Test, lag=10 for non seasonal data
+augment(fit_export_naive) |>  features(.innov, ljung_box, lag = 10)
+```
+
+Given the quarterly data and obvious seasonal trends, SNAIVE is appropriate for the Bricks series. 
+If the model fits well, we expect the innovation residuals to be scattered randomly about zero. But they seem to have more deviations in some periods (1970-1980). The absence of randomness means that the model cannot completely explain the fundamental trends in the data. Broad spectrum of residuals (-200 to 100) means that the model is making substantial prediction errors. ACF plot reveals many lags beyond the significance line, the residuals are strongly autocorrilated. This implies that the model is inadequate to fully represent the intricacy of the dataset. The residuals in the histogram are right-skewed. If the model fits well, a normal distribution is usually expected. But in our case, the SNAIVE model usually underestimates the production levels (the model regularly forecasts values below the real production). The Ljung-Box test confirms a strong autocorrelation in the residuals (p-value is 0). The SNAIVE model has not caught all the pertinent trends in the data. The plot with predictions has the confidence being limited, since the residuals show autocorrelation and are not normally distributed. The model offers a reasonable short-term projection based on seasonality; nevertheless, we should be careful not to rely too much on these forecasts for long-term projections given the problems the residuals expose. As a result, the SNAIVE model is not particularly fit for the Bricks Production.
+
+```{r model_aus_bricks}
+# Extract data of interest
+aus_bricks <- aus_production |>
+  filter(!is.na(Bricks)) |>
+  select(Quarter, Bricks)
+
+#Plot data
+autoplot(aus_bricks, Bricks) +
+  ggtitle("Bricks Production in Australia over time ")
+
+# Define and estimate a model
+fit_bricks_snaive <- aus_bricks  |> model(SNAIVE(Bricks))
+
+# Look at the residuals
+fit_bricks_snaive |> gg_tsresiduals() +
+  ggtitle("Residuals' plots, Australian bricks producation, SNAIVE model")
+
+# Look a some forecasts
+fit_bricks_snaive |> forecast() |> autoplot(aus_bricks) +
+  ggtitle("Bricks Production in Australia over time with a forecast, SNAIVE model")
+
+#Ljung-Box Test, lag=2m for seasonal data, m=4 for our quaterly data
+augment(fit_bricks_snaive) |>  features(.innov, ljung_box, lag = 8)
+```
+
+
+## Exercise 5.7
+**For your retail time series (from Exercise 7 in Section 2.10):**
+
+- Create a training dataset consisting of observations before 2011 using
+
+```{r load_data_retail}
+#Load and filter data
+set.seed(12345678)
+myseries <- aus_retail |>
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1)) 
+
+myseries_train <- myseries |>
+  filter(year(Month) < 2011)
+```
+
+
+- Check that your data have been split appropriately by producing the following plot.
+
+From the plot, particularly following 2000, we clearly see a seasonal pattern and an increasing trend in turnover across time.
+
+```{r split_retail}
+#Plot data
+autoplot(myseries, Turnover) +
+  autolayer(myseries_train, Turnover, colour = "red")
+```
+
+- Fit a seasonal naïve model using SNAIVE() applied to your training data (myseries_train).
+
+```{r fit_retail}
+#Train model
+fit <- myseries_train |>
+  model(SNAIVE(Turnover))
+```
+
+- Check the residuals.
+
+```{r resid_retail}
+#Plot residuals
+fit |> gg_tsresiduals() +
+  ggtitle("Residuals' plots, Australian retail turnover, SNAIVE model")
+```
+
+- Do the residuals appear to be uncorrelated and normally distributed?
+
+If they are uncorrelated, the residuals should ideally disperse randomly around zero in the innovation residuals plot; but, in this case, the residuals show obvious trends, particularly around the 1990s. This implies that some systematic structure is left in the residuals since the model is not totally catching all the trends in the data. Significant autocorrelation at several lags is shown by the ACF plot, many lags surpass the blue significance line. This suggests that the residuals are not uncorrelated and that some residual seasonality or trends in the data the model missed. The histogram of residuals shows slight right skewness, the residuals are not quite normally distributed. The model is usually underestimating the turnover values. Residual analysis of the SNAIVE model reveals that the residuals do not seem to be either completely uncorrelated or normally distributed.
+
+- Produce forecasts for the test data
+
+Following the same trend seen in past years, the model forecasts the seasonal variations forward. The great seasonality in the data is reflected in the forecast line's recurrent peaks and valleys. But as we go further, the confidence intervals widen greatly. Following the established seasonal trend, the forecast indicates that turnover will keep rising over time; yet, the widening intervals imply that the certainty of the model decreases as we enter the more far future.
+
+```{r}
+fc <- fit |>
+  forecast(new_data = anti_join(myseries, myseries_train))
+fc |> autoplot(myseries)
+```
+
+- Compare the accuracy of your forecasts against the actual values.
+
+With an MAE of 0.915, the model's forecasts average 0.915 units off from the actual turnover values in the training data. The RMSE of 1.21 offers an estimate of the average size of forecast errors. The MAPE of 12.4% indicates that, although modest, the average percentage error is 12.4%, which might be lowered. Strong autocorrelation in the residuals reveals by the rather high ACF1 value of 0.768 that the model leaves some structure unmodeled. The MAE rises to 1.24 on the test data, indicating that on unseen data the forecast errors of the model are rather higher. Reflecting greater errors in the test data than the training data, the RMSE rises to 1.55. The MAPE of 9.06% indicates that the average percentage error is rather better in the test data, suggesting that the model is performing sufficiently. Although the ACF1 drops to 0. 601, this still indicates autocorrelation in the residuals on the test data, implying the model is not totally reflecting the complexity of the data.
+
+```{r}
+fit |> accuracy()
+fc |> accuracy(myseries)
+```
+
+- How sensitive are the accuracy measures to the amount of training data used?
+
+The degree of training data used affects the accuracy measures. Smaller MAE and RMSE for the training data suggested more accurate forecasts during the period the model was trained over. Usually, the model learns from more historical patterns and seasonal cycles as the volume of training data rises, so enhancing accuracy. As shown here, the model might still leave some autocorrelation unaccounted. Reducing the training data would probably result in higher MAE and RMSE for both training and test sets since the model would have less data points to learn from. For seasonal data like this, where more training data helps the model better grasp repeated trends, the sensitivity is particularly strong. There is still a balance, though. Sometimes if the model overfits to antiquated patterns, too much training data can compromise accuracy. Cross-valuation can thus minimize the RMSE and assist in determining the ideal training size.
