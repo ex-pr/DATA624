@@ -1,0 +1,399 @@
+---
+title: "Homework 4. Data Preprocessing/Overfitting"
+author: "Daria Dubovskaia"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: show
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+editor_options:
+  chunk_output_type: console
+  markdown:
+    wrap: sentence
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+#chunks
+knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+#libraries
+library(tidyverse)
+library(fpp3)
+library(latex2exp)
+library(seasonal)
+library(GGally)
+library(gridExtra)
+library(reshape2)
+library(Hmisc)
+library(corrplot)
+library(e1071)
+library(caret)
+library(VIM)
+#random seed
+set.seed(42)
+```
+
+
+## Exercise 3.1
+
+The UC Irvine Machine Learning Repository6 contains a data set related to glass identification. The data consist of 214 glass samples labeled as one of seven class categories. There are nine predictors, including the refractive index and percentages of eight elements: Na, Mg, Al, Si, K, Ca, Ba, and Fe. The data can be accessed via:
+
+```{r}
+library(mlbench)
+data(Glass)
+str(Glass)
+```
+
+**(a) Using visualizations, explore the predictor variables to understand their distributions as well as the relationships between predictors.**
+
+RI distribution is slightly right-skewed, with the majority of values falling between 1.515 and 1.525. Na has a nearly normal distribution with the highest concentrations around 13-15. Mg seems to have binomial distribution. Al is slightly right-skewed with a peak around 1.5. Si has a nearly normal distribution with most values ranging from 72 to 74. K is skewed to the right, with the majority of values close to zero. Ca is mostly concentrated around 8, with a right-skewed distribution. Ba values are close to zero, with few occurrences of higher values. Fe has a right-skewed distribution with most values close to zero. The Type distribution is unequal, with Type 1 and Type 2 having many more samples. We may need to resample or some other method to address this imbalance in model training and evaluation. Ba, Fe and K are nearly absent in many samples, with only a few having non-zero values.
+
+The pair plot with correlation coefficients shows the relationships between predictors. There is a strong positive correlation between Ca and RI (0.81), the higher Ca leads to a higher RI. Si has a strong negative correlation with RI (-0.542) and  Ca (-0.444), as the Si percentage rises, the RI and Ca content fall. Ba and Fe have weak correlations with others, indicating that they may not be as directly related to the rest of the predictors. The scatter plots show patterns in the data. For example, Mg and Ca form a distinct group, with a cluster of points at low Mg levels.
+
+The box plots show how each predictor is distributed across the types of glass. Glass types 6, 7 contain more Na, whereas type 1 has a wider range of  Na values. Glass type 5 has a significantly higher Mg content than others (Mg may be an important factor in determining this glass type). Glass type 7 has a higher Al content, whereas types 1 and 2 have lower values and less variation. ype 1 glass contains less Ca, whereas type 5 has a higher content. Type 7 has elevated levels of Ba and K, which could be useful for classification. Iron content is low in most glass types, with a slightly wider range in type 6.
+
+```{r explore_data}
+#Copy data
+glass_df <- Glass
+
+#Extract names of predictors
+element_list <- colnames(glass_df)[1:9]  
+plot_list <- list()
+
+#Create distribution plots for predictors
+for (i in element_list) {
+  p <- ggplot(glass_df, aes_string(x = i)) +
+    geom_histogram(fill = "skyblue", color = "black") +
+    labs(title = paste(i, " Distribution"), x = i, y = "Count") +
+    theme_minimal()
+  
+  plot_list[[i]] <- p
+}
+
+p <- ggplot(glass_df, aes(x = Type)) +
+    geom_bar(fill = "skyblue", color = "black") +
+    labs(title = "Type Distribution", x = "Type of glass", y = "Count") +
+    theme_minimal()
+
+plot_list[[10]] <- p
+
+#Organize plots in a 3x3 grid
+do.call(grid.arrange, c(plot_list, ncol = 3))
+
+#Plot relationships between predictors
+ggpairs(glass_df[, element_list])
+
+#Melt data for box plots
+glass_df_box <- melt(glass_df, id.vars = "Type")
+
+#Box plot for each predictor variable by Type
+ggplot(glass_df_box, aes(x = factor(Type), y = value)) +
+  geom_boxplot() +
+  facet_wrap(~ variable, scales = "free", ncol = 3) +
+  labs(x = "Type of glass", y = "Value", title = "Box plots of predictors vs type of glass") +
+  theme_minimal()
+```
+
+**(b) Do there appear to be any outliers in the data? Are any predictors skewed?**
+
+Outliers are in the box plots for all the plots except Mg (outliers are marked in red). Outliers are most noticeable in variables like K, Ba, Ca, where some glass samples have abnormally high values. Na, Al, Si, Fe all have outliers, albeit to a lesser extent. These outliers indicate that the composition of various glass types may differ. Predictors with significant positive skewness include K (6.55), Ba (3.42), Ca (2.05) and Fe (1.75), indicating right-skewed distributions. Al (0.91) exhibits moderate positive skewness. Mg (-1.15) has negative skewness, indicating a more left-skewed distribution. It is supported by the previous histogram plots.
+
+The presence of outliers in many predictors suggests that rigorous preprocessing steps (e.g., outlier removal or transformation) may be required before building models. The skewness of variables such as K, Ba, and Fe suggests that transformations (e.g., logarithmic) may be useful in normalizing these distributions for specific types of models.
+
+```{r}
+#Box plots to check outliers
+box_plot_list <- list()
+
+for (i in element_list) {
+  p <- ggplot(glass_df, aes_string(y = i, x = "1")) + 
+    geom_boxplot(outlier.color = "red") +
+    labs(title = paste("Box Plot of", i), x = "", y = i) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+  box_plot_list[[i]] <- p
+}
+
+#Organize plots in a 3x3 grid
+do.call(grid.arrange, c(box_plot_list, ncol = 3))
+
+#Skewness
+sapply(glass_df[, 1:9], skewness)
+```
+
+**(c) Are there any relevant transformations of one or more predictors that might improve the classification model?**
+
+Some predictor variables (RI, K, Ca, Ba, Fe) have a significant positive skewness (>1). A log transformation can help reduce this skewness, get a more symmetric distributions and maybe improve performance of models that assume normality (linear models, logistic regression). Square/cube root transformation is less aggressive than log transformations and can assist in reducing skewness. It can be used for moderately skewed variables, such as Al (skewness is 0.89). A log or square root transformation is recommended for variables with skewness greater than one or highest-to-lowest value ratios greater than twenty. Also, we can just use Box-Cox transformation, which is a more generalized transformation technique that can handle various types of skewness in the data.
+
+Because predictors have different scales, centering (subtracting the mean) and scaling (dividing by the standard deviation) can aid models that are sensitive to scale differences, such as linear models or support vector machines.
+
+After applying the Box-Cox transformation, centering and scaling (to RI, Mg, Al, K, Ca, Ba, Fe), we see that it partially normalized the distributions of Mg, Al, and Ca, as evidenced by their decreased skewness. RI, K, Ba, Fe still have a high skewness and outliers. To address these issues, we perform a spatial sign transformation on the variables RI, K, Ba, Fe. The spatial sign transformation normalized these variables to a range of -1 to 1, emphasizing. The box plots and histograms show that, while the spatial sign transformation lessened the impact of outliers, it did not completely eliminate them, especially in the case of Ba. We also applied scaling and centering to Na, Si to have similar scale across the data. 
+
+To summarize, the Box-Cox transformation, scaling, and spatial sign transformation all contributed to partially normalizing the skewness of some variables and mitigating the impact of extreme outliers, thereby preparing the dataset for further modeling. Depending on the model chosen, additional outlier handling (such as IQR filtering) may be considered to improve model performance. Also, the further work with correlated variables is needed (PCA, remove one of the correlated variables, etc).
+
+```{r boxcox_transform}
+#Remove the 'Type' column before processing
+glass_process <- glass_df[, !names(glass_df) %in% "Type"]
+
+#Choose columns for transformation
+skewed_cols <- c('RI', 'Mg', 'Al', 'K', 'Ca', 'Ba', 'Fe')
+
+#Box-Cox and scaling transformation with 'preProcess' function
+preproc <- preProcess(glass_process[, skewed_cols], method = c("BoxCox", "center", "scale"))
+
+#Apply the transformations to the data
+glass_df_transformed <- glass_process
+glass_df_transformed[, skewed_cols] <- predict(preproc, glass_process[, skewed_cols])
+
+plot_list <- list()
+
+for (i in element_list) {
+  p <- ggplot(glass_df_transformed, aes_string(x = i)) +
+    geom_histogram(fill = "skyblue", color = "black") +
+    labs(title = paste(i, " Transformed Distribution"), x = i) +
+    theme_minimal()
+  
+  plot_list[[i]] <- p
+}
+
+do.call(grid.arrange, c(plot_list, ncol = 3))
+
+box_plot_list <- list()
+
+for (i in element_list) {
+  p <- ggplot(glass_df_transformed, aes_string(y = i, x = "1")) + 
+    geom_boxplot(outlier.color = "red") +
+    labs(title = paste("Transformed Box Plot of", i), x = "", y = i) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+  box_plot_list[[i]] <- p
+}
+
+#Organize plots in a 3x3 grid
+do.call(grid.arrange, c(box_plot_list, ncol = 3))
+
+#Skewness
+sapply(glass_df_transformed[, 1:9], skewness)
+sapply(glass_df[, 1:9], skewness)
+```
+
+```{r spatial_transform}
+#Columns for spatial sign transformation
+spatial_sign_cols <- c('RI', 'K', 'Ba', 'Fe')
+
+#Apply spatial sign
+preproc_spatial <- preProcess(glass_df_transformed[, spatial_sign_cols], method = "spatialSign")
+
+glass_df_transformed[, spatial_sign_cols] <- predict(preproc_spatial, glass_df_transformed[, spatial_sign_cols])
+
+center_cols <- c('Na', 'Si')
+preproc_scenter <- preProcess(glass_df_transformed[, center_cols], method = c("center", "scale"))
+glass_df_transformed[, center_cols] <- predict(preproc_scenter, glass_df_transformed[, center_cols])
+
+#Plot results
+plot_list <- list()
+for (i in element_list) {
+  p <- ggplot(glass_df_transformed, aes_string(x = i)) +
+    geom_histogram(fill = "skyblue", color = "black") +
+    labs(title = paste(i, " Transformed Distribution"), x = i) +
+    theme_minimal()
+  
+  plot_list[[i]] <- p
+}
+
+#Organize histograms in a grid
+do.call(grid.arrange, c(plot_list, ncol = 2))
+
+box_plot_list <- list()
+for (i in element_list) {
+  p <- ggplot(glass_df_transformed, aes_string(y = i, x = "1")) + 
+    geom_boxplot(outlier.color = "red") +
+    labs(title = paste("Transformed Box Plot of ", i), x = "", y = i) +
+    theme_minimal() +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+  box_plot_list[[i]] <- p
+}
+
+do.call(grid.arrange, c(box_plot_list, ncol = 2))
+
+#Skewness
+sapply(glass_df_transformed[, 1:9], skewness)
+sapply(glass_df[, 1:9], skewness)
+```
+
+
+## Exercise 3.2
+
+The soybean data can also be found at the UC Irvine Machine Learning Repository. Data were collected to predict disease in 683 soybeans. The 35 predictors are mostly categorical and include information on the environmental conditions (e.g., temperature, precipitation) and plant conditions (e.g., left spots, mold growth). The outcome labels consist of 19 distinct classes.
+The data can be loaded via:
+
+```{r}
+#library(mlbench)
+data(Soybean)
+## See ?Soybean for details
+```
+
+
+**(a) Investigate the frequency distributions for the categorical predictors. Are any of the distributions degenerate in the ways discussed earlier in this chapter?**
+
+The following code calculates the frequency for the categorical predictors. Based on the book:
+A rule of thumb for detecting near-zero variance predictors is:
+
+- The fraction of unique values over the sample size is low (say 10 %).
+- The ratio of the frequency of the most prevalent value to the frequency of the second most prevalent value is large (say around 20).
+
+If both of these criteria are true and the model in question is susceptible to this type of predictor, it may be advantageous to remove the variable from the model. 
+
+These degenerate predictors may not provide useful modeling information due to a lack of variability, it can potentially lead to biased or unstable model training.
+
+According to the frequency distribution analysis, leaf.mild, mycelium, sclerotia are the most obvious predictors that were identified as degenerate. leaf.mild has 535 instances of 0, 20 instances of 1, 20 instances of 2, the number of unique values is small (0.44%), and the most frequent value has a high ratio to the second most frequent value (535/20 > 20). mycelium has 639 instances of 0 and 6 instances of 1, it has a low proportion of unique values and the most frequent value has a high ratio to the second most frequent value (0.3% which is less than acceptable 10%, 639/6 > 20). sclerotia has 625 instances of 0 and 20 of 1, this predictor also has a low proportion of unique values (only 0.3%) and the most frequent value has a high ratio to the second most frequent value (625/20 > 20). 
+
+```{r soybean_distrib}
+#Copy data
+soybean_df <- Soybean
+
+#Choose categorical predictors
+categorical_predictors <- colnames(soybean_df)[colnames(soybean_df) != "Class"]
+plot_list <- list()
+
+#Calculate frequency distributions and check for degenerate distributions
+degenerate_distributions <- list()
+
+for (i in categorical_predictors) {
+  # Create a data frame for plotting, including NAs as a category
+  plot_data <- data.frame(value = factor(soybean_df[[i]], exclude = NULL))
+  
+  #Generate the plot
+  p <- ggplot(plot_data, aes(x = value)) +
+    geom_bar(fill = 'skyblue') +
+    labs(title = paste('Distribution of', i), x = i, y = 'Count') +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  
+  #Store the plot in list
+  plot_list[[i]] <- p
+  
+  freq_table <- table(soybean_df[[i]])
+  print(paste(i, "frequency distribution"))
+  print(freq_table)
+  cat("\n")
+  
+  #Calculate fraction of unique values
+  fraction_unique <- length(freq_table) / nrow(soybean_df)
+  
+  #Calculate ratio of most frequent value to second most frequent value
+  sorted_freqs <- sort(freq_table, decreasing = TRUE)
+  if (length(sorted_freqs) > 1) {
+    freq_ratio <- sorted_freqs[1] / sorted_freqs[2]
+  } else {
+    freq_ratio <- Inf  #In case with only one unique value
+  }
+  
+  #Check for degenerate predictors based on chapter's criteria
+  if (fraction_unique < 0.1 && freq_ratio >= 20) {
+    degenerate_distributions[[i]] <- freq_table
+  }
+}
+
+#Print the degenerate distributions
+if (length(degenerate_distributions) > 0) {
+  print("Degenerate distributions:")
+  print(degenerate_distributions)
+} else {
+  print("No degenerate distributions found in the data.")
+}
+
+#Organize plots in grids
+batch_size <- 9
+num_batches <- ceiling(length(plot_list) / batch_size)
+
+for (j in 1:num_batches) {
+  start_index <- (j - 1) * batch_size + 1
+  end_index <- min(j * batch_size, length(plot_list))
+  do.call(grid.arrange, c(plot_list[start_index:end_index], ncol = 3))
+}
+```
+
+**(b) Roughly 18 % of the data are missing. Are there particular predictors that are more likely to be missing? Is the pattern of missing data related to the classes?**
+
+Based on the analysis, no predictors stands out for having a significantly higher proportion of missing values. This suggests that the missing data is distributed fairly evenly across the majority of predictors. However, some predictors are nearing the 18% missing mark. For example, predictors such as hail, lodging, seed.tmt, and severe have almost 18% missing values. Class, date and leaves predictors have no missing data at all. A portion of the data for these variables is missing, but not to such an extent that it is considered degenerate. These variables have the same percentage of missing data (17.7%), it may indicate a pattern in these variables.
+
+When looking at the relationship between missing data and outcome classes, a clear pattern emerges. Certain classes have a high rate of missing data. Notably, classes such as "2-4-d-injury", "cyst-nematode", "diaporthe-pod-&-stem-blight", "herbicide-injury"  have at least some predictors with 100% missing data. "phytophthora-rot" class has around 77% of its samples with missing values. In contrast, several classes, such as "bacterial-pustule," "brown-spot," "charcoal-rot," "downy-mildew," and others, have no missing data. The stark difference between classes with high and low missing data percentages suggests a possible systematic missingness related to the nature of specific plant diseases. It is possible that for certain diseases (such as "cyst-nematode" or "herbicide-injury"), specific measurements were not feasible or relevant, resulting in a complete lack of data in those predictors.
+
+Approximately 18% of the data is missing, and the distribution of missing data appears to differ across predictors and classes. Some predictors are more susceptible to missing values, and for certain classes, specific predictors show a high percentage of missing data, implying a potential relationship between missing data and class labels.
+
+```{r missing_data}
+#Calculate the percentage of na values
+na_percent <- colSums(is.na(soybean_df)) / nrow(soybean_df) * 100
+
+#Plot the missing data percent
+na_df <- data.frame(predictor = names(na_percent), NaPercent = na_percent)
+
+ggplot(na_df, aes(x = reorder(predictor, -NaPercent), y = NaPercent)) +
+  geom_bar(stat = 'identity', fill = 'skyblue') +
+  labs(title = 'Percentage of NA values for each variable',
+       x = 'Variable', y = 'NA, %') +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+na_df %>% arrange(desc(NaPercent))
+
+#Columns with more than 18% missing data
+high_na_variables <- na_df %>% filter(NaPercent > 18)
+print("Variables with more than 18% missing data:")
+print(high_na_variables)
+
+#Binary indicator for rows with any missing data
+soybean_df$na_indicator <- apply(is.na(soybean_df), 1, any)
+
+#The proportion of rows with NAs for each class
+na_by_class <- soybean_df %>%
+  group_by(Class) %>%
+  summarise(NaPercent = mean(na_indicator) * 100)
+
+#Plot the proportion of Nas for each class
+ggplot(na_by_class, aes(x = reorder(Class, -NaPercent), y = NaPercent)) +
+  geom_bar(stat = 'identity', fill = 'coral') +
+  labs(title = 'Percentage of NA values for each variable',
+       x = 'Class', y = 'NA, %') +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+
+#Remove the temporary 'na_indicator'
+soybean_df <- soybean_df %>% select(-na_indicator)
+```
+
+**(c) Develop a strategy for handling missing data, either by eliminating predictors or imputation.**
+
+When analyzing the soybean dataset, approximately 18% of the data is missing for various predictors. The analysis from part (b) revealed that certain predictors have close to or above 18% missing values, and that some classes, such as "2-4-d-injury," "cyst-nematode," and "herbicide-injury," exhibit systematic missingness. Given these insights, the strategy for dealing with missing data will include both removing predictors with a high missingness rate and appropriately imputing the remaining data.
+
+1) Remove predictors with high missing rates (more than 15% missing data). High levels of missing data can introduce bias and reduce model reliability. We should remove predictors with more than 15% missing values (hail, lodging, seed.tmt, severe, germ, leaf.mild, fruiting.bodies, fruit.spots, seed.discoloration, shriveling).
+
+2) Remove degenerate columns: leaf.mild, mycelium and sclerotia. If we include them, we can introduce noise and reduce model performance.
+
+3) Impute using KNN. Since all columns are categorical, we may use k-Nearest Neighbors (KNN). First, all categorical variables should be converted to numerical format using one-hot encoding, KNN requires numerical input. It allows for more accurate and relevant replacements for missing values than simpler methods such as mode imputation.
+
+Optional. For classes "2-4-d-injury," "cyst-nematode", "diaporthe-pod-&-stem-blight", "herbicide-injury" with  predictors that are completely missing, the lack of data may be significant. For example, missing data could indicate that some measurements are irrelevant or not feasible for certain diseases. As a result, we may create indicators enables the model to "know" which observations had missing values. This is useful if the missingness is not random and may be a predictor of the outcome. It means to create new binary columns that indicate whether a specific value is missing from an observation (rows as 1 if the original value is missing, otherwise 0). 
+
+```{r na_handle}
+#1) Remove predictors with high missing rates
+high_na_predictors <- c('hail', 'lodging', 'seed.tmt', 'sever', 'germ', 'leaf.mild', 'fruiting.bodies', 'fruit.spots', 'seed.discolor', 'shriveling')
+
+soybean_df_clean <- soybean_df %>% select(-one_of(high_na_predictors))
+
+#2) Remove degenerate columns: 'mycelium', 'sclerotia'
+degenerate_col <- c('mycelium', 'sclerotia')
+
+soybean_df_clean <- soybean_df_clean %>% select(-one_of(degenerate_col))
+
+#3) Impute using KNN
+soybean_df_clean  <- kNN(soybean_df_clean , k = 5)
+
+soybean_df_clean  <- soybean_df_clean %>% select(-contains("_imp"))
+
+
+#Check any remaining NAs 
+any(is.na(soybean_df_clean))
+
+summary(soybean_df_clean)
+```
