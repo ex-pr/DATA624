@@ -545,9 +545,4 @@ ets_stl %>% select(ets_adj) %>%  accuracy()
 report(ets_stl)
 myseries_test <- anti_join(myseries, myseries_train)
 fc_stl_transformed$.mean |> accuracy(myseries_test$Turnover)
-
-#Plot forecasts
-fc_stl_transformed <- fc_stl_transformed %>%
-  rename(Turnover = .mean) %>%
-  select(Month, Turnover)
 ```
