@@ -1,0 +1,553 @@
+---
+title: "Homework 5. Exponential smoothing"
+author: "Daria Dubovskaia"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: hide
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+editor_options:
+  chunk_output_type: console
+  markdown:
+    wrap: sentence
+---
+
+
+```{r setup, message=FALSE, warning=FALSE}
+#chunks
+knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+#libraries
+library(tidyverse)
+library(fpp3)
+library(latex2exp)
+library(seasonal)
+library(GGally)
+library(gridExtra)
+library(reshape2)
+library(Hmisc)
+library(corrplot)
+library(e1071)
+library(caret)
+library(VIM)
+library(forecast)
+#random seed
+set.seed(42)
+```
+
+## Exercise 8.1
+
+Consider the the number of pigs slaughtered in Victoria, available in the aus_livestock dataset.
+
+### a.
+**Use the ETS() function to estimate the equivalent model for simple exponential smoothing. Find the optimal values of α and ℓ_0, and generate forecasts for the next four months.**
+
+The dataset contains monthly records from July 1972 to December 2018 (558 observations). The variables are Month, Animal (pigs), State (Victoria), and Count (the number of pigs slaughtered).
+
+A simple exponential smoothing model was applied using the ETS() function with the specification ETS(A,N,N): Additive errors (A), no trend (N), no seasonality (N). The model estimation produced the smoothing parameter α = 0.3221247 and initial level ℓ_0 = 100646.6. This α value means that the model updates the forecast with new data, but it still relies heavily on previous data to make predictions (since α is closer to 0 than to 1).
+
+Next, we used the model to generate forecasts for the next four months (Jan to Apr 2019). The forecasts are centered on 95,187 slaughtered pigs, with increasing variability as time passes. We used a model with an additive error component but no trend or seasonal components, so the forecasts will remain constant over time, centered on the same value 95,187. The plot below depicts the observed data as well as the fitted and forecasted values for the next four months. 
+
+```{r simple_exp_smooth}
+#Filter data
+vict_pigs_df <- aus_livestock %>% 
+  filter(State == "Victoria", Animal == "Pigs")
+
+#Check data
+head(vict_pigs_df)
+str(vict_pigs_df)
+
+#Simple exponential smoothing
+fit <- vict_pigs_df %>%
+  model(ETS(Count ~ error("A") + trend("N") + season("N")))
+
+#Optimal values: alpha=0.3221247, l0=100646.6
+report(fit)
+
+#Forecast 4 months
+fc <- fit %>%
+  forecast(h = "4 months")
+
+#Show results of forecasting
+print(fc)
+
+#Plot data + forecast and fitted values
+fc |>
+  autoplot(vict_pigs_df) +
+  geom_line(aes(y = .fitted), col="#D55E00",
+            data = augment(fit)) +
+  labs(y="Count", title="Number of pigs slaughtered in Victoria state together with the forecast, \nJul 1976 - Apr 2019") +
+  guides(colour = "none")
+```
+
+### b.
+**Compute a 95% prediction interval for the first forecast using ŷ±1.96s where s is the standard deviation of the residuals. Compare your interval with the interval produced by R.**
+
+The manually calculated 95% prediction interval was [76,871.01, 113,502.1]. R's hilo() function produced an interval of [76,854.79, 113,518.3]. This close alignment indicates that the manual method accurately captures forecast variability, confirming the interval produced by R's built-in functions. The intervals produced by R are slightly wider, indicating that the forecast package handles uncertainty more nuancedly.
+
+```{r 95_pred_interval}
+#Extract standard deviation of the residuals from the model
+s <- augment(fit) %>%
+  pull(.resid) %>%
+  sd()
+
+#Extract first fc value
+first_fc <- fc %>%
+  filter(Month == yearmonth("2019 Jan")) %>%
+  pull(.mean)
+
+#Calculate the 95% prediction interval for the first forecast using ŷ±1.96s
+lower_bound <- first_fc - 1.96 * s
+upper_bound <- first_fc + 1.96 * s
+
+#The interval produced by R
+r_interval <- fc %>%
+  filter(Month == yearmonth("2019 Jan")) %>%
+  mutate(interval = hilo(Count, level = 95)) %>%
+  mutate(lower = interval[[1]]$lower, upper = interval[[1]]$upper)
+
+#Print the results
+cat("95% Prediction Interval (Manual Calculation): [", lower_bound, ", ", upper_bound, "]\n")
+cat("95% Prediction Interval (Produced by R): [", r_interval$lower, ", ", r_interval$upper, "]\n")
+```
+
+## Exercise 8.5
+
+Data set global_economy contains the annual Exports from many countries. Select one country to analyse.
+
+### a. 
+**Plot the Exports series and discuss the main features of the data.**
+
+Argentina's exports rose steadily between 1960 and 2000, with some fluctuations.Exports increased dramatically between 2000 and 2002. This increase was primarily caused by the global rise in commodity prices, particularly for Argentina's key exports of soybeans, wheat, and beef. Following this surge, exports began to decline noticeably in 2003. This decrease can be explained by economical crisis at the beginning of 2000s. Also, following an increase in global commodity prices, the market experienced a correction. Argentina, which is heavily reliant on agricultural exports, was impacted by these price fluctuations, which added to the decline in export revenues. Because the data is aggregated once a year, there is no explicit seasonality. 
+
+```{r plot_argentina_export}
+#Filter data
+argentina_df <- global_economy %>% 
+  filter(Country == "Argentina") 
+
+#Check data
+head(argentina_df)
+str(argentina_df)
+
+#Plot the data
+argentina_df %>%
+  autoplot(Exports) +
+  labs(y="Exports, % of GDP", title="Exports of goods and services from Argetina,  1960 - 2017") 
+```
+
+### b.
+**Use an ETS(A,N,N) model to forecast the series, and plot the forecasts.**
+
+The plot depicts the original series of Argentina's exports, as well as the forecasts generated by the ETS(A, N) model for the next 4 years.
+
+The optimal smoothing parameter (alpha) is around 0.8855. The initial level (l[0]) is around 7.4074. The model produced a sigma^2 of 7.9819, indicating variance in the residuals.
+
+We used the model to forecast the next 4 years. The plot below shows the historical data, fitted values (in red), and forecasted values with prediction intervals. The plot indicates that the ETS(A, N, N) model predicts constant export percentages, with no upward or downward trends, does not account for potential fluctuations caused by future economic changes, as it is supposed to be for the simple exponential smoothing. 
+
+```{r simple_exp_smooth_argentina}
+#Simple exponential smoothing
+fit <- argentina_df %>%
+  model(ETS(Exports ~ error("A") + trend("N") + season("N")))
+
+#Optimal values: alpha=0.8855249, l0=7.407428
+report(fit)
+
+#Forecast 4 years
+fc <- fit %>%
+  forecast(h = 4)
+
+#Plot data + forecast and fitted values
+fc |>
+  autoplot(argentina_df) +
+  geom_line(aes(y = .fitted), col="#D55E00",
+            data = augment(fit)) +
+  labs(y="Exports, % of GDP", title="Exports of goods and services from Argetina \ntogether with the ETS(A,N,N) forecast, 1960 - 2019") +
+  guides(colour = "none")
+```
+
+### c.
+**Compute the RMSE values for the training data.**
+
+The training data has a root mean squared error value of approximately 2.776. It represents the average deviation between the model's fitted values and the actual export.
+
+```{r accuracy_argentina}
+#Accuracy of the model, rmse=2.776087
+accuracy(fit)
+```
+
+### d.
+**Compare the results to those from an ETS(A,A,N) model. (Remember that the trended model is using one more parameter than the simpler model.) Discuss the merits of the two forecasting methods for this data set.**
+
+ETS(A,N,N) and ETS(A,A,N) have similar RMSE values of around 2.78. It means that adding a trend component does not significantly improve forecast accuracy. The ETS(A,N,N) has a slightly lower MAE (1.62), it appears that the series lacks a strong, consistent trend component. The MAE for ETS(A,A,N) is slightly higher (1.64), implying that the trend component may not provide much value. The difference in ACF1 values (0.00902 for ETS(A,N,N) vs. 0.0271 for ETS(A,A,N)) implies that the residuals are slightly more correlated in the ETS(A,A,N) model, which could indicate overfitting. The ETS(A,N,N) model, being simpler, appears to handle the data well without adding unnecessary complexity.
+Despite the addition of a parameter, the ETS(A,A,N) model improves forecasting accuracy for this dataset only marginally. Therefore, in this case, the simpler model may be more appropriate.
+
+```{r ets_aan_argentina}
+#ETS(A,A,N) exponential smoothing
+fit_aan <- argentina_df %>%
+  model(ETS(Exports ~ error("A") + trend("A") + season("N")))
+
+#Optimal values: alpha=0.1050697, beta  = 0.1050697, l0=25.02638, b0=0.7827546
+report(fit_aan)
+
+#Forecast 4 years
+fc_aan <- fit_aan %>% forecast(h = 4)
+
+#Plot data + forecast and fitted values
+fc_aan |>
+  autoplot(argentina_df) +
+  geom_line(aes(y = .fitted), col="#D55E00",
+            data = augment(fit_aan)) +
+  labs(y="Exports, % of GDP", title="Exports of goods and services from Argetina \ntogether with the ETS(A,A,N) forecast, 1960 - 2019") +
+  guides(colour = "none")
+
+#Accuracy of the model, rmse=2.776427
+accuracy(fit_aan)
+```
+
+### e.
+**Compare the forecasts from both methods. Which do you think is best?**
+
+The ETS(A,N,N) model produces a forecast that remains relatively flat, indicating that the model does not anticipate a clear trend moving forward. This behavior may be appropriate if the future of the time series is expected to oscillate around a stable level. The ETS(A,A,N) model generates a forecast with a slight trend component, which may not be consistent with the nature of the data. Given the similar RMSE values, lower residual autocorrelation, and the advantage of simplicity, the ETS(A,N,N) model appears to be a better fit for this dataset. The exports series does not show a consistent, strong trend that justifies the use of a more complex model such as ETS(A, A, N).
+
+###f.
+**Calculate a 95% prediction interval for the first forecast for each model, using the RMSE values and assuming normal errors. Compare your intervals with those produced using R.**
+
+ETS(A,N,N) Model:
+
+- Manual calculation: [5.88, 16.76]
+- Produced by R: [5.79, 16.86]
+
+ETS(A,A,N) Model:
+
+- Manual calculation: [5.99, 16.87]
+- Produced by R: [5.79, 17.07]
+
+The manually calculated intervals using RMSE values differ slightly from the intervals generated by R. This difference arises because the manual calculation assumes constant variance (RMSE) and normal errors, whereas the R takes into account the internal error structure and model-specific uncertainty, including level and trend components (if present). The intervals produced by R are slightly wider, indicating that the forecast package handles uncertainty more nuancedly.
+
+```{r 95_pred_interval_argent}
+#Extract first fc value
+first_fc_ann <- fc %>%
+  filter(Year == 2018) %>%
+  pull(.mean)
+
+first_fc_aan <- fc_aan %>%
+  filter(Year == 2018) %>%
+  pull(.mean)
+
+z_value <- qnorm(0.975) 
+
+#Calculate the 95% prediction interval for the first forecast using rmse
+lower_ann <- first_fc_ann - z_value * accuracy(fit)$RMSE
+upper_ann <- first_fc_ann + z_value * accuracy(fit)$RMSE
+
+lower_aan <- first_fc_aan - z_value * accuracy(fit_aan)$RMSE
+upper_aan <- first_fc_aan + z_value * accuracy(fit_aan)$RMSE
+
+#The interval produced by R
+r_interval_ann <- fc %>%
+  filter(Year == 2018) %>%
+  mutate(interval = hilo(Exports, level = 95)) %>%
+  mutate(lower = interval[[1]]$lower, upper = interval[[1]]$upper)
+
+r_interval_aan <- fc_aan %>%
+  filter(Year == 2018) %>%
+  mutate(interval = hilo(Exports, level = 95)) %>%
+  mutate(lower = interval[[1]]$lower, upper = interval[[1]]$upper)
+
+#Print the results
+cat("95% Prediction Interval for ETS(A,N,N) (Manual Calculation): [", lower_ann, ", ", upper_ann, "]\n")
+cat("95% Prediction Interval for ETS(A,N,N) (Produced by R): [", r_interval_ann$lower, ", ", r_interval_ann$upper, "]\n")
+
+cat("95% Prediction Interval for ETS(A,A,N) (Manual Calculation): [", lower_aan, ", ", upper_aan, "]\n")
+cat("95% Prediction Interval for ETS(A,N,N) (Produced by R): [", r_interval_aan$lower, ", ", r_interval_aan$upper, "]\n")
+```
+
+
+## Exercise 8.6
+
+**Forecast the Chinese GDP from the global_economy data set using an ETS model. Experiment with the various options in the ETS() function to see how much the forecasts change with damped trend, or with a Box-Cox transformation. Try to develop an intuition of what each is doing to the forecasts.**
+
+*[Hint: use a relatively large value of h when forecasting, so you can clearly see the differences between the various options when plotting the forecasts.]*
+
+The plot for China's GDP has a distinct upward trend, particularly after the 1990, which suggests an exponential growth pattern. This growth is distinguished by an increase in variability over time, which a regular additive trend model may find difficult to capture. We should investigate a variety of ETS models in order to account for the variability and dynamics.
+
+4 models were used to generate a 15-year forecast for China's GDP: 
+
+- Additive trend (A,A,N): It assumes linear growth with constant errors. This model serves as a baseline, capturing consistent growth patterns but potentially underestimating exponential growth. RMSE = 1.90e+11; MAE = 9.59e+10, AIC = 3258.
+
+- Additive damped trend (A,Ad,N): Damping moderates future growth, assuming a slowdown in China's GDP growth rate over time. RMSE = 1.90e+11, MAE = 9.49e + 10, AIC = 3260. Close AIC values for additive trend models indicate that introducing a damped trend only slightly modifies future growth while not significantly improving the model's fit. 
+
+- Box-Cox transform with additive damped trend: Box-Cox transformation stabilizes variance and an additive damped trend. It helps to deal with changing variability in GDP more effectively while assuming a potential slowing of growth. RMSE = 1.96e+11, MAE = 1.02e+11, AIC = -135. The error metrics are slightly higher than those for simple additive models, indicating that growth has been overestimated. The significantly lower AIC indicates a better overall fit to the data, demonstrating the model's ability to adapt to changing variance while maintaining growth moderation.
+
+- Multiplicative trend and error (M,M,N): It takes into account proportional changes in the data to better capture the exponential nature of GDP growth. However, the model may be overly optimistic about future growth. RMSE = 2.67e+11, MAE = 1.16e+11, AIC = 3096. The higher error metrics indicate that this model may overfit the data and predict overly optimistic growth. The lower than additive models AIC means the model's aggressive projection may pose a risk of overestimation in the long run.
+
+- Box-Cox transform with multiplicative trend and error (Box-Cox M,M,N): It combines the benefits of variance stabilization with multiplicative components to handle changing variance and growth dynamics. RMSE = 2.97e+11, MAE = 1.29e+11, AIC = -136. The models' highest error metrics indicate that, while they capture exponential trends, they may be overly aggressive. This model has the lowest AIC, indicating the best fit to the data, but its higher error metrics suggest that it may predict too strong a growth trajectory.
+
+Additive models have similar accuracy metrics, with the damped trend model performing slightly better in terms of MAE. Their higher AIC values compared to the Box-Cox models suggest that they do not capture the variability in GDP growth as well. However, their lower RMSE and MAE suggest that they provide more conservative and potentially realistic forecasts. The Box-Cox damped model accounts for changing GDP variance using the Box-Cox transformation and incorporates damping to moderate future growth. While the RMSE and MAE are slightly higher than the simple additive models, the significantly lower AIC (-135) indicates a better fit to the data. The model has some balance between exponential growth and a possible future slowdown.
+
+Multiplicative models are more aggressive in capturing exponential growth. Despite having the lowest AIC values, their higher RMSE and MAE indicate a tendency to overestimate future GDP. The Box-Cox multiplicative model, in particular, has the highest RMSE and MAE values, indicating potential risks in forecasting overly optimistic growth.
+
+The choice of model depends on the assumptions about China’s future GDP growth. The Box-Cox damped model takes a balanced approach, capturing the changing variance in historical GDP data while also including a damping effect to moderate future growth. It outperforms simpler additive models in terms of model fit (lower AIC), but it may slightly overestimate growth due to higher error metrics. If we expect China's GDP to continue its exponential growth but at a slower rate, the Box-Cox damped model appears to be the best fit. 
+
+```{r china_df}
+#Filter data
+china_df <- global_economy %>% filter(Country == "China")
+
+#Plot data
+autoplot(china_df, GDP) +
+  labs(y="GDP, $USD", title="China, Gross domestic product, 1960 - 2017") 
+
+#Box-Cox lambda
+lambda <- china_df %>%
+  features(GDP, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#ETS models
+ets_model <- china_df %>%
+  model(ets_aan = ETS(GDP ~ error("A") + trend("A") + season("N")), #additive trend
+        ets_aan_damped = ETS(GDP ~ error("A") + trend("Ad") + season("N")), #damped trend
+        ets_boxcox_damped = ETS(box_cox(GDP, lambda) ~ error("A") + trend("Ad") + season("N")), #boxcox damped
+        ets_mmn = ETS(GDP ~ error("M") + trend("M") + season("N")), # Multiplicative trend and error
+        ets_boxcox_mmn = ETS(box_cox(GDP, lambda) ~ error("M") + trend("M") + season("N"))) # Box-Cox with multiplicative trend and error
+        
+
+#accuracy
+accuracy(ets_model)
+report(ets_model)
+
+#Forecast for the 15 years
+fc <- ets_model %>% forecast(h = 15)
+
+#Choose data to plot forecast clearer
+china_df_1990 <- china_df %>% filter(Year >= 1990)
+
+#Plot forecasts
+fc |>
+  autoplot(china_df_1990, level=NULL) +
+  labs(y="GDP, $USD", title="China, Gross domestic product with forecast for 15 years") +
+  scale_color_manual(values = c("red", "darkgreen", "purple", "blue", "lightblue"), labels = c("A,A,N","A,Ad,N", "Box-Cox A,Ad,N", "M,M,N", "Box-Cox M,M,N"))
+```
+
+## Exercise 8.7
+
+**Find an ETS model for the Gas data from aus_production and forecast the next few years. Why is multiplicative seasonality necessary here? Experiment with making the trend damped. Does it improve the forecasts?**
+
+The plot of Australian gas production shows a clear upward trend as well as seasonal fluctuations.  Multiplicative seasonality is required here because seasonal fluctuations in gas production appear to increase as overall production rises (the magnitude of the seasonal pattern in the data depends on the magnitude of the data).
+
+3 models were used to generate a 4-year forecast for Australian gas production: Additive trend and additive seasonality (A,A,A); additive trend and multiplicative seasonality (M,A,M); damped additive trend with multiplicative seasonality (M,Ad,M). We used multiplicative errors for M,A,M and M,Ad,M models because they adapt to the changing scale of the data, which shows increasing variability with the trend. Using an additive seasonality model would fail to capture mentioned proportional changes. The multiplicative models account for this proportionality, and are a better fit to the data. Damped trend helps to moderate future growth if the data indicates that growth will eventually slow. The models with multiplicative seasonality outperform the model with additive seasonality. For example, the A,A,A model has an AIC of 1872, an MAE of 3.35, and an RMSE of 4.76, while the M,A,M model has an AIC of 1681, an MAE of 3.02, and an RMSE of 4.60.
+
+The M,Ad,M model's accuracy is slightly better than for M,A,M model because of the introduction of a damped trend (RMSE of 4.59 vs 4.6, MAE of 3.03 vs 3.02). However, the AIC is slightly higher (1684 vs 1681) that for the model without damped trend. The damped trend model has a slightly better accuracy, but the difference is negligible, and the increased AIC implies that it introduces additional complexity without significantly improving the forecast. As a result, the M,A,M model is the most suitable for capturing the seasonal patterns and underlying trend in this dataset.
+
+```{r gas_australia}
+#Filter data
+gas_df <- aus_production %>% select(Quarter, Gas)
+
+#Plot data
+autoplot(gas_df, Gas) +
+  labs(y="Gas production, petajoules", title="Australian Gas Production")
+
+#ETS models
+ets_model <- gas_df %>%
+  model(ets_aaa = ETS(Gas ~ error("A") + trend("A") + season("A")), #additive seasonality
+        ets_aam = ETS(Gas ~ error("M") + trend("A") + season("M")), #multiplicative seasonality and errors
+        ets_aam_damped = ETS(Gas ~ error("M") + trend("Ad") + season("M"))) #added damped trend
+
+#Forecast for the 16 quarters (4 years)
+fc <- ets_model %>% forecast(h = 16)
+
+#Accuracy
+accuracy(ets_model)
+report(ets_model)
+
+#Plot forecasts
+gas_df_1980 <- gas_df %>% filter(Quarter >= yearquarter("1980 Q1"))
+fc |>
+  autoplot(gas_df_1980, level=NULL) +
+  labs(y="Gas production, petajoules", title="Australian Gas Production with forecast for 4 years") +
+  facet_grid(.model~.) + 
+  scale_color_manual(values = c("red", "purple", "blue"), labels = c("A,A,A", "M,A,M", "M,Ad,M")) 
+```
+
+## Exercise 8.8
+
+**Recall your retail time series data (from Exercise 7 in Section 2.10).**
+
+### a.
+**Why is multiplicative seasonality necessary for this series?**
+
+The turnover data plot shows both an upward trend and seasonality, with the seasonal variations increasing in magnitude as the series' overall level rises. This indicates that the seasonal effects are proportional to the series level, implying that multiplicative seasonality is a good fit for this data. In contrast, an additive seasonality model assumes constant seasonal effects at all series levels, which does not account for the observed pattern.
+
+```{r retail_data}
+set.seed(1234)
+myseries <- aus_retail |>
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+
+#Plot data
+autoplot(myseries, Turnover) +
+  labs(y="Turnover,  $Million AUD", title="Tasmanian retail trade turnover from cafes, restaurants \nand takeaway food services, Apr 1982 - Dec 2018")
+```
+
+### b.
+**Apply Holt-Winters’ multiplicative method to the data. Experiment with making the trend damped.**
+
+To capture seasonal variations and trends, we used models below to generate a 2-year forecast for Tasmanian retail turnover. :
+
+- Multiplicative seasonality with additive trend (M,A,M): It assumes linear growth with seasonal variations proportional to series level. RMSE = 1.34, MAE = 0.943, AIC = 2875. Multiplicative errors are used because the variability in turnover appears to increase proportionally to the series level.
+
+- Multiplicative seasonality with damped additive trend (M,Ad,M): It also includes damping to slow the trend over time. RMSE = 1.36, MAE = 0.946, AIC = 2887.
+
+The metrics show that both models are very close in accuracy, with the non-damped model slightly outperforming the damped model in terms of RMSE and AIC. The close values show that including a damped trend does not significantly improve the model's fit. The forecast plot demonstrates that both models capture the trend and seasonality accurately. While the damped trend model modifies the future growth rate, the differences in accuracy between the two models are minor. As a result, the choice between these models may be determined by whether moderated (dampened) future growth is deemed more realistic or not. However, because the non-damped model outperforms the damped version slightly, it may be preferable for forecasting Tasmanian retail turnover in this scenario.
+
+```{r models_mam_damped}
+#Holt-Winters' multiplicative method and damped trend
+ets_model <- myseries %>%
+  model(ets_mam = ETS(Turnover ~ error("M") + trend("A") + season("M")),
+        ets_mam_damped = ETS(Turnover ~ error("M") + trend("Ad") + season("M")))
+
+#Forecast for the 2 years (24 months)
+fc <- ets_model %>% forecast(h = 24)
+
+#Accuracy
+accuracy(ets_model)
+report(ets_model)
+
+#Plot forecasts
+myseries_2000 <- myseries %>% filter(Month >= yearmonth("2010 Jan"))
+fc |>
+  autoplot(myseries_2000, level=NULL) +
+  labs(y="Turnover,  $Million AUD", title="Tasmanian retail trade turnover from cafes, restaurants a\nnd takeaway food services with forecast for 6 years") +
+  scale_color_manual(values = c("red", "purple"), labels = c("M,A,M", "M,Ad,M")) 
+```
+
+### c.
+**Compare the RMSE of the one-step forecasts from the two methods. Which do you prefer?**
+
+The RMSE values for the single-step forecasts: Holt-Winters multiplicative is 4.63; Damped trend model: 4.35.
+
+The damped model had a slightly lower RMSE. For a one-step (short-term) forecast, the damped model predicted the next data point in the series more accurately.
+
+```{r onestep_fc}
+#Forecast for the 1 month
+fc_onestep <- ets_model %>% forecast(h = 1)
+
+# Calculate RMSE for one-step forecasts
+rmse_mam <- sqrt(mean((tail(myseries, 1)$Turnover - fc_onestep$.mean[1])^2))
+rmse_damped <- sqrt(mean((tail(myseries, 1)$Turnover - fc_onestep$.mean[2])^2))
+
+cat("Holt-Winters One-Step RMSE:", rmse_mam, "\n")
+cat("Damped Trend Model One-Step RMSE:", rmse_damped, "\n")
+```
+
+### d.
+**Check that the residuals from the best method look like white noise.**
+
+Although the damped model has slightly higher one-step forecast accuracy, the performance differences between the two models are small. The non-damped model slightly outperforms in terms of overall RMSE and AIC, so it is reasonable to choose it for this assignment.
+
+Residuals over time plot shows residuals fluctuating around zero without any discernible pattern or trend.  ACF plot has the majority of the bars fall within the blue dashed lines, indicating that there is no significant autocorrelation in the residuals. One spike exceeds the confidence intervals, but it is within acceptable limits. The histogram of residuals shows a roughly symmetric distribution centered on zero. This implies that the residuals are normally distributed. The Ljung-Box test showed a p-value of 0.410, which is higher than the typical significance level (0.05). This implies that we cannot reject the null hypothesis that the residuals are white noise. There is no significant autocorrelation in the residual data.
+
+Based on the residual plots and the Ljung-Box test results, it appears that the residuals resemble white noise, the chosen non-damped is appropriate for the data.
+
+```{r resid_myseries}
+#Check residuals
+ets_model %>% select(ets_mam) %>%
+  gg_tsresiduals() +
+  ggtitle("Residuals' plots, Australian Turnover")
+
+#Ljung-Box test 
+ets_model %>% select(ets_mam) %>%
+  augment(ets_model) %>%  features(.innov, ljung_box, lag = 10)
+```
+
+### e.
+**Now find the test set RMSE, while training the model to the end of 2010. Can you beat the seasonal naïve approach from Exercise 7 in Section 5.11?**
+
+The SNaive model produced a test set RMSE of 9.13, an MAE of 7.58, and a MAPE of 14.4%. The ETS(M, A, M) model had a test set RMSE of 3.99, MAE of 3.23, and MAPE of 6.31%. In contrast, the damped model had a higher RMSE (8.60), MAE (7.18), and MAPE (13.6%). The ETS(M, A, M) model outperforms the seasonal naive and damped models based on these metrics. The forecast plot shows that the ETS(M, A, M) model (in red) closely tracks the upward trend of retail turnover, whereas the damped ETS(M, Ad, M) model (in purple) generates more conservative forecasts. In contrast, the SNaive model (in blue) reproduces the seasonal pattern observed during the training period but fails to capture the upward trend effectively, as evidenced by its higher RMSE, MAE, and MAPE values. Furthermore, residual analysis revealed that the residuals of the ETS(M, A, M) model were low in autocorrelation, indicating that the model accurately captured the data's underlying patterns.
+
+```{r naive_vs_mam}
+#naïve approach from Exercise 7 in Section 5.11
+myseries_train <- myseries |>
+  filter(year(Month) < 2011)
+
+#MAM models
+ets_models <- myseries_train %>%
+  model(ets_mam = ETS(Turnover ~ error("M") + trend("A") + season("M")),
+        ets_mam_damped = ETS(Turnover ~ error("M") + trend("Ad") + season("M")))
+
+#SNAIVE model
+snaive_model <- myseries_train %>%
+  model(SNAIVE(Turnover))
+
+fc_ets <- ets_models |>
+  forecast(new_data = anti_join(myseries, myseries_train))
+
+fc_snaive <- snaive_model |>
+  forecast(new_data = anti_join(myseries, myseries_train))
+
+#Accuracy
+ets_models |> accuracy()
+snaive_model |> accuracy()
+report(ets_models)
+report(snaive_model)
+fc_ets |> accuracy(myseries)
+fc_snaive |> accuracy(myseries)
+
+#Plot forecasts
+combined_fc <- bind_rows(fc_ets, fc_snaive)
+
+combined_fc %>%
+  autoplot(myseries, level = NULL) +
+  labs(y="Turnover,  $Million AUD", title="Forecasts from ETS and SNAIVE Models") + 
+  scale_color_manual(values = c("red", "purple", "blue"), labels = c("M,A,M", "M,Ad,M", "SNAIVE"))
+```
+
+## Exercise 8.9
+
+**For the same retail data, try an STL decomposition applied to the Box-Cox transformed series, followed by ETS on the seasonally adjusted data. How does that compare with your best previous forecasts on the test set?**
+
+STL Decomposition + ETS(A, A, N): the model has a training accuracy of RMSE=0.0699, MAE=0.0515, AIC=190.10, and a test set accuracy of RMSE=6.6863, MAE=5.5723, MAPE=11.22%.
+
+Previous best model ETS(M, A, M): the model has a training accuracy of RMSE=1.18, MAE=0.823, AIC=2065.0, and a test set accuracy of RMSE=3.99, MAE=3.23, MAPE=6.31%.
+
+The STL decomposition + ETS(A, A, N) approach did not outperform the previous best model (ETS(M, A, M)) on the test set. The new model has a higher RMSE on the test set (6.6863) than the previous model (3.99). The new model's MAE and MAPE (5.5723 and 11.22%, respectively) are also lower than those of the previous model (3.23 and 6.31%). By decomposing the series and removing seasonality before fitting the ETS model, we may have missed important seasonal patterns that the original ETS(M, A, M) model could detect. This may explain why the new approach performed poorly on the test set. While using an STL decomposition followed by an ETS model is an acceptable method for dealing with seasonality and non-constant variance, it did not outperform the simpler ETS model with multiplicative seasonality in this case. The retail data is likely to contain seasonal variations that are critical for accurate forecasting, which the ETS(M, A, M) model can handle more effectively.
+
+```{r stl_ets}
+#Box-Cox transformation
+lambda <- BoxCox.lambda(myseries_train$Turnover)
+myseries_train_transformed <- myseries_train %>%
+  mutate(Turnover_transformed = BoxCox(Turnover, lambda))
+
+#STL decomposition
+stl_fit <- myseries_train_transformed %>%
+  model(stl_bx = STL(Turnover_transformed ~ season(window = "periodic")))
+
+#Seasonally adjusted data
+seasonally_df <- components(stl_fit)
+
+#ETS model, seasonally adjusted data
+ets_stl <- seasonally_df %>%
+  model(ets_adj = ETS(season_adjust ~ error("A") + trend("A") + season("N")))
+
+# Forecast for the test period
+fc_stl <- ets_stl %>% 
+  select(ets_adj) %>% 
+  forecast(h = nrow(anti_join(myseries, myseries_train)))
+
+# Inverse Box-Cox transformation of the forecasts
+fc_stl_transformed <- fc_stl %>%
+  mutate(.mean = InvBoxCox(.mean, lambda))
+
+#Accuracy
+ets_stl %>% select(ets_adj) %>%  accuracy()
+report(ets_stl)
+myseries_test <- anti_join(myseries, myseries_train)
+fc_stl_transformed$.mean |> accuracy(myseries_test$Turnover)
+
+#Plot forecasts
+fc_stl_transformed <- fc_stl_transformed %>%
+  rename(Turnover = .mean) %>%
+  select(Month, Turnover)
+```
