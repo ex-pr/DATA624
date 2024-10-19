@@ -2,14 +2,14 @@
 title: "Homework 6. ARIMA models"
 author: "Daria Dubovskaia"
 output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
   html_document:
     toc: true
     toc_float: true
     theme: united
     code_folding: hide
-  pdf_document:
-    latex_engine: xelatex
-    toc: true
 editor_options:
   chunk_output_type: console
   markdown:
@@ -403,7 +403,7 @@ y_t = \phi_1 y_{t-1} + \theta_1 e_{t-1} + e_t
 
 where \(\phi_1\) is the AR parameter, \(\theta_1\) is the MA parameter, and \(e_t\) represents white noise with mean zero and variance \(\sigma^2 = 1\).
 
-The model combines features of the autoregressive and moving average processes. The plot shows the effects of both components. \(\phi_1 =0.6\) adds persistence to the time series, indicating that the current value is influenced by the previous value. This causes the data to form short-term trends or clusters, with high values followed by high values and low values by low values. The persistence is moderate, with \(\phi_1 = 0.6\), which is not too close to 1. \(\theta_1 =0.6) takes into account the impact of the previous error term on the current observation. With \(\theta_1 = 0.6\), the current value of the series depends not only on the prior observation but also on the previous error. This smoothes the noise and reduces sudden jumps in the data, producing short-term correlations and smoother transitions between clusters. Together, these parameters produce a time series that appears stationary, with fluctuations centered on a constant mean and relatively stable variance.
+The model combines features of the autoregressive and moving average processes. The plot shows the effects of both components. \(\phi_1 =0.6\) adds persistence to the time series, indicating that the current value is influenced by the previous value. This causes the data to form short-term trends or clusters, with high values followed by high values and low values by low values. The persistence is moderate, with \(\phi_1 = 0.6\), which is not too close to 1. \(\theta_1 =0.6\) takes into account the impact of the previous error term on the current observation. With \(\theta_1 = 0.6\), the current value of the series depends not only on the prior observation but also on the previous error. This smoothes the noise and reduces sudden jumps in the data, producing short-term correlations and smoother transitions between clusters. Together, these parameters produce a time series that appears stationary, with fluctuations centered on a constant mean and relatively stable variance.
 
 ```{r arma_11}
 #Code to generate data ARMA(1,1)
