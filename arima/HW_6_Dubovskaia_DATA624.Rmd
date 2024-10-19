@@ -1,0 +1,779 @@
+---
+title: "Homework 6. ARIMA models"
+author: "Daria Dubovskaia"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: hide
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+editor_options:
+  chunk_output_type: console
+  markdown:
+    wrap: sentence
+---
+
+
+```{r setup, message=FALSE, warning=FALSE}
+#chunks
+knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+#libraries
+library(tidyverse)
+library(fpp3)
+library(latex2exp)
+library(seasonal)
+library(GGally)
+library(gridExtra)
+library(reshape2)
+library(Hmisc)
+library(corrplot)
+library(e1071)
+library(caret)
+library(VIM)
+library(forecast)
+library(urca)
+library(aTSA)
+#random seed
+set.seed(42)
+```
+
+## Exercise 9.1
+
+Figure 9.32 shows the ACFs for 36 random numbers, 360 random numbers and 1,000 random numbers.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ex-pr/DATA624/refs/heads/main/arima/9_32_acf.png">
+</p>
+
+**a) Explain the differences among these figures. Do they all indicate that the data are white noise?**
+
+- For the data with 36 points, the ACF appears more volatile, with a wider confidence bands. This variability is due to the smaller sample size. However, the ACF plot does not indicate strong autocorrelations, the series still behaves as white noise.
+
+- For the data with 360 points, the ACF plot becomes more stable. The autocorrelation values fall within the confidence intervals, indicating no significant autocorrelation at any lag, the series is still a white noise. 
+
+- With 1,000 random numbers, the ACF plot becomes even more stable. The fluctuations are smaller, and all autocorrelation values are within the confidence intervals. This strongly suggests that the series is white noise. Larger sample sizes reduce sampling variability, making it easier to confirm the absence of autocorrelation.
+
+While all three ACF plots show a white noise series, the ACF for smaller samples (36 points) is more volatile due to higher sampling variability. As the sample size grows, the ACF stabilizes and shows no significant autocorrelation, confirming that the data is white noise in all three cases.
+
+**b) Why are the critical values at different distances from the mean of zero? Why are the autocorrelations different in each figure when they each refer to white noise?**
+
+The critical values (dashed blue lines) are calculated using the autocorrelation coefficients' confidence intervals. The confidence interval narrows as a sample size increases because the standard error of the autocorrelation estimates decreases with increasing sample size per \(\pm 1.96/\sqrt T\).
+
+The left plot (36 data points) has a small sample size, so the critical values are relatively far from zero, resulting in a wider confidence interval. In the right plot (1,000 data points), the critical values are very close to zero, indicating tighter confidence intervals and high precision in the autocorrelation estimates. As a result, when the sample size grows, the confidence intervals shrink, and the critical values approach zero.
+
+Despite the fact that all three time series represent white noise, smaller sample sizes (36 numbers) have higher variability, so autocorrelation values fluctuate more, resulting in some spikes that exceed the confidence interval. This does not necessarily imply a significant autocorrelation, but rather a greater level of uncertainty in estimating it from a small sample.  As the sample size increases, the autocorrelations become more stable and approach the theoretical value of zero for white noise.
+
+## Exercise 9.2
+
+**A classic example of a non-stationary series are stock prices. Plot the daily closing prices for Amazon stock (contained in gafa_stock), along with the ACF and PACF. Explain how each plot shows that the series is non-stationary and should be differenced.**
+
+The plot of Amazon's daily closing prices shows a clear upward trend over time, the variance does not appear to increase significantly, but the persistent trend indicates that the series is non-stationary. The series should be transformed (e.g., differenced) to remove the trend and achieve stationarity.
+
+The ACF plot demonstrates very slow decay with values close to one, particularly at lower lags, indicating strong autocorrelation, which is characteristic of non-stationary data. The persistent autocorrelation requires differencing to become stationary. The PACF plot shows a sharp drop-off after lag 1, as expected for a non-stationary series with a strong AR component. The presence of significant autocorrelation at lag 1, followed by a sharp decline, is typical of an AR(1), which supports that differencing is required to stabilize the series mean (first-order of differencing). 
+
+The time series and ACF/PACF plots show that Amazon's stock prices are non-stationary, with a strong trend and high autocorrelation. To make the series stationary, differencing should be used to remove the trend and prepare the series for further modeling. Based on the ACF and PACF plots, an ARIMA(1,1,0) model may be a good fit, indicating first-order differencing and an AR component at lag 1.
+
+```{r amazon_data}
+#Filter data
+amazon_df <- gafa_stock %>%
+  filter(Symbol == "AMZN")
+
+#Plot data
+amazon_df |>
+  gg_tsdisplay(Close, plot_type="partial") +
+  labs(y="Closing price, $USD", x="Date",  title="The daily closing prices for Amazon stock, 2014 - 2018")
+```
+
+## Exercise 9.3
+
+For the following series, find an appropriate Box-Cox transformation and order of differencing in order to obtain stationary data.
+
+**a) Turkish GDP from global_economy.**
+
+The Turkish GDP series has an upward trend, indicating nonstationarity. The ACF plot shows a slow decay, which suggests strong autocorrelation over time and confirms the need for transformation and differencing to achieve stationarity. The PACF plot shows a significant spike at lag 1 (the presence of a strong AR component). 
+
+To stabilize any potential variance, a Box-Cox transformation was used. The lambda value using the Guerrero method was **0.157**. Next, unit root tests were performed to determine the required order of differencing: the trend had to be removed using **first-order differencing**, there was no need for seasonal differencing. 
+
+After using first-order differencing and Box-Cox transformation, the series no longer showed a trend and appeared stationary. The ACF and PACF plots of the transformed and differenced series revealed no significant spikes, implying that the majority of the autocorrelation had been removed. Though, the ACF plot shows a significant spike at lag 1, which suggests the presence of a MA component. The PACF plot still has a significant spike at lag 1, indicating the presence of an AR component (ARIMA(1,1,1) model might be used further). Also, the ACF and PACF plots' confidence intervals narrowed, the variability and uncertainty in autocorrelation estimates have decreased, due to the removal of non-stationary components. To confirm stationarity, the ADF test was used, p-values less than 0.01 in all cases, which means that the transformed and differenced series is now stationary.
+
+```{r turkish_gdp}
+#Filter data
+turkishgdp_df <- global_economy %>% 
+  filter(Country == "Turkey")
+
+#Check if BoX-Cox is needed
+#Plot data
+turkishgdp_df |>
+  gg_tsdisplay(GDP, plot_type="partial") +
+  labs(y="GDP, $USD",  title="Turkey,Gross domestic product, \n1960 - 2017")
+
+#Box-Cox lambda 0.157
+lambda <- turkishgdp_df %>%
+  features(GDP, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#Check what differencing is needed
+turkishgdp_df %>%
+  features(box_cox(GDP, lambda), unitroot_ndiffs)
+
+turkishgdp_df %>%
+  features(box_cox(GDP, lambda), unitroot_nsdiffs)
+
+#Box-Cox transformation and differencing
+turkishgdp_df <- turkishgdp_df %>%
+    mutate(boxcox_gdp = difference(box_cox(GDP, lambda)))
+
+#After Box-Cox transformation and differencing
+#Plot data
+turkishgdp_df |>
+  gg_tsdisplay(boxcox_gdp, plot_type="partial") +
+  labs(y="(Box-Cox, Diff)", title="Transformed Turkey Gross domestic product, \nλ = 0.157, 1960 - 2017") 
+
+#Augmented Dickey-Fuller stationarity test
+adf.test(turkishgdp_df$boxcox_gdp)
+```
+
+**b) Accommodation takings in the state of Tasmania from aus_accommodation.**
+
+The data is reported quarterly, and it shows a clear upward trend and seasonal pattern as well as increasing variance over time. The ACF plot displays high autocorrelation at quarterly lags, suggesting a seasonal pattern. The PACF plot shows a significant spike at lag 1 (presence of an AR pattern). 
+
+We should use the Box-Cox transformation to reduce variance and normalize data distribution. The lambda value (using the Guerrero method) is **0.0018**. Next, we should use the **first-order differencing** to remove the overall trend, and **a seasonal differencing** of order four to address seasonality, because unit root tests showed one order of regular and one order of seasonal differencing were required.
+
+After the transformations, the ACF and PACF plots show significant spikes at lags 1, 3, and 4 (presence of AR and MA components). This suggests that an ARIMA or SARIMA model with AR and MA components would be suitable further. Also, the ACF and PACF plots' confidence intervals narrowed, the variability and uncertainty in autocorrelation estimates have decreased, due to the removal of non-stationary components such as trend and seasonality. The results of the ADF test show that all p-values are less than 0.01, which means that the transformed and differenced series is now stationary.
+
+```{r tasmania_accomodations}
+#Filter data
+tasmania_df <- aus_accommodation %>% 
+  filter(State == "Tasmania")
+
+#Check if BoX-Cox is needed
+#Plot data
+tasmania_df |> 
+  gg_tsdisplay(Takings, plot_type="partial") +
+  labs(y="Takings, Millions $AUD",  title="Tasmania tourist accommodation takings, \n1998 Q1 - 2016 Q2")
+
+#Box-Cox lambda 0.0018
+lambda <- tasmania_df %>%
+  features(Takings, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#Check what differencing is needed
+tasmania_df %>%
+  features(box_cox(Takings, lambda), unitroot_ndiffs)
+
+tasmania_df %>%
+  features(box_cox(Takings, lambda), unitroot_nsdiffs)
+
+#Box-Cox transformation and differencing
+tasmania_df <- tasmania_df %>%
+    mutate(boxcox_take = box_cox(Takings, lambda))
+
+tasmania_df <- tasmania_df %>%
+    mutate(diff_take = difference(difference(boxcox_take, 4)))
+
+#After Box-Cox transformation and differencing
+#Plot data
+tasmania_df |> 
+  gg_tsdisplay(diff_take, plot_type="partial") +
+  labs(y="Takings (Box-Cox, Diff)", title="Transformed Tasmania tourist accommodation takings, \nλ = 0.0018, 1998 Q1 - 2016 Q2") 
+
+#Augmented Dickey-Fuller stationarity test
+adf.test(tasmania_df$diff_take)
+```
+
+**c) Monthly sales from souvenirs.**
+
+The monthly souvenir sales plot shows a clear upward trend, with noticeable seasonal fluctuations, particularly around the end of each year. The ACF plot has significant autocorrelation at multiple lags, including a large spike at lag 12, indicating a yearly seasonal pattern. The PACF plot also shows a significant spike at lag 1 and 12, indicating the presence of AR components and a trend.
+
+We should use the Box-Cox transformation to reduce variance and normalize data distribution. The lambda value (using the Guerrero method) is **0.002**. To remove the trend, **first-order differencing** is required as well as **seasonal differencing** given the seasonal spikes (lag 12). The unit root tests confirmed that one order of regular and one order of seasonal differencing are required. 
+
+After the transformations, the spikes in the ACF plot have decreased, but there is still a significant spike at lag 1, indicating a MA term. Spikes at lag 1 in the PACF plot indicate the presence of AR components (ARIMA model with AR and MA terms may be used further). Also, the ACF and PACF plots' confidence intervals narrowed, the variability and uncertainty in autocorrelation estimates have decreased, due to the removal of non-stationary components such as trend and seasonality. The results of the ADF tests how that all p-values are less than 0.01, which means that the transformed and differenced series is now stationary.
+
+```{r souvenirs}
+#Copy data
+souvenirs_df <- souvenirs
+
+#Check if BoX-Cox is needed
+#Plot data
+souvenirs_df |> 
+  gg_tsdisplay(Sales, plot_type="partial") +
+  labs(y="Sales, $AUD",  title="Monthly sales for a souvenir shop, Queensland, \nAustralia, 1987 - 1993")
+
+#Box-Cox lambda 0.002
+lambda <- souvenirs_df %>%
+  features(Sales, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#Check what differencing is needed
+souvenirs_df %>%
+  features(box_cox(Sales, lambda), unitroot_ndiffs)
+
+souvenirs_df %>%
+  features(box_cox(Sales, lambda), unitroot_nsdiffs)
+
+#Box-Cox transformation and differencing
+souvenirs_df <- souvenirs_df %>%
+    mutate(boxcox_sales = box_cox(Sales, lambda))
+
+souvenirs_df <- souvenirs_df %>%
+    mutate(diff_sales = difference(difference(boxcox_sales, 12)))
+
+#After Box-Cox transformation and differencing
+#Plot data
+souvenirs_df |> 
+  gg_tsdisplay(diff_sales, plot_type="partial") +
+  labs(y="Sales (Box-Cox, Diff)", title="Transformed monthly sales for a souvenir shop, \nλ = 0.002, 1987 - 1993")
+
+#Augmented Dickey-Fuller stationarity test
+adf.test(souvenirs_df$diff_sales)
+```
+
+
+## Exercise 9.5
+
+**For your retail data (from Exercise 7 in Section 2.10), find the appropriate order of differencing (after transformation if necessary) to obtain stationary data.**
+
+The turnover data plot shows both an upward trend and seasonality, with the seasonal fluctuations increasing as the series' overall level rises. The ACF plot shows slow decay, indicating the existence of a trend. The PACF plot has significant spike at lag 1, indicating the presence of AR components. There is the need for differencing and transformation to achieve stationarity. unitroot_nsdiffs() and unitroot_ndiffs() are used to determine the number of differencing steps. A single **first-order differencing** (ndiffs = 1) is required to remove any linear trend and achieve stationarity. Also, a single **seasonal differencing** (nsdiffs = 1) is required to eliminate the seasonal component.
+
+To stabilize the variance, the Box-Cox transformation is applied (the Guerrero method, lambda is **0.162**). The transformation helps to make the variance more consistent over time, which is necessary for stationarity. After the transformation, seasonal differencing (lag 12) was used to eliminate the annual seasonal component. The remaining trend was removed using first-order differencing.
+
+The plot for the transformed series showed that the series now oscillated around a constant mean. 
+
+The ACF plot revealed significant spikes at the few lags, indicating that there is still some residual autocorrelation in the differenced series. The PACF plot showed few significant spikes, indicating that the series had been sufficiently differentiated. The spikes at lag 1 in both plots indicate short-term autocorrelation in the data. AR(1) and MA(1) terms in the non-seasonal ARIMA model could be useful. The spikes at lag 12 in both plots indicate that even after seasonal differencing, seasonal effects remain in the data. This residual seasonality may not have been completely removed by differencing alone, implying the need for seasonal AR(P=1) and  MA(Q=1) components in the ARIMA model. Also, the ACF and PACF plots' confidence intervals narrowed, the variability and uncertainty in autocorrelation estimates have decreased, due to the removal of non-stationary components such as trend and seasonality. The ADF tests for the various lags all showed a p-value less than 0.01, indicating that the null hypothesis of a unit root could be rejected in favor of the alternative hypothesis that the series was stationary. The seasonal and first-order differencing methods effectively removed the trend and seasonal components from the data.
+
+The series was transformed into a stationary making it suitable for ARIMA modeling with differencing orders set to **d=1, D=1** and with the previous Box-Cox transformation to stabilize the variance, where d represents **first-order differencing and D represents seasonal differencing**. The resulting ARIMA models are ARIMA(1,1,1) for non-seasonal part and (1,1,1)[12] for a seasonal part.
+
+```{r tasmania_turnover}
+set.seed(1234)
+myseries <- aus_retail |>
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+
+#Plot data
+myseries |> 
+  gg_tsdisplay(Turnover, plot_type="partial") +
+  labs(y="Turnover,  $Million AUD", title="Tasmanian retail trade turnover from cafes, restaurants \nand takeaway food services, Apr 1982 - Dec 2018")
+
+#Box-Cox transformation lambda 0.162
+lambda <- BoxCox.lambda(myseries$Turnover)
+myseries <- myseries %>%
+  mutate(Turnover_transformed = BoxCox(Turnover, lambda))
+
+#Check what differencing is needed
+myseries %>%
+  features(Turnover_transformed, unitroot_ndiffs)
+
+myseries %>%
+  features(Turnover_transformed, unitroot_nsdiffs)
+
+#First-order and seasonal differencing
+myseries <- myseries %>%
+  mutate(diff_turnover = difference(difference(Turnover_transformed, 12)))
+
+#Plot transformed data
+myseries |> 
+  gg_tsdisplay(diff_turnover, plot_type="partial") +
+  labs(y="Turnover (Box-Cox, Diff)", title="Transformed Tasmanian retail trade turnover, \nλ = 0.162, Apr 1982 - Dec 2018")
+
+#ADF test for stationarity
+adf.test(myseries$diff_turnover)
+```
+
+## Exercise 9.6
+
+Simulate and plot some data from simple ARIMA models.
+
+**a) Use the following R code to generate data from an AR(1) model with \(\phi_1 = 0.6\) and \(\sigma^2 = 1\). The process starts with \(y_1 = 0\).**
+
+e <- rnorm(100) generates 100 random values based on a standard normal distribution with a mean of 0 and a variance \(\sigma^2 = 1\). The noise terms \(e_t\) correspond to a normal distribution with the specified variance.
+
+```{r generate_data}
+#Code to generate data
+set.seed(1254)
+y <- numeric(100)
+e <- rnorm(100, mean = 0, sd = sqrt(1))
+for(i in 2:100)
+  y[i] <- 0.6*y[i-1] + e[i]
+sim <- tsibble(idx = seq_len(100), y = y, index = idx)
+```
+
+**b) Produce a time plot for the series. How does the plot change as you change \(\phi_1\)?**
+
+When \(\phi_1 = 0.2\), the time series is less persistent (phi is closer to 0, white noise). The values fluctuate around the mean with frequent changes in direction. The observations tend to revert quickly to the mean, resulting in a "noisy" time series with little evidence of long-term trends. When the parameter \(\phi_1\) is close to zero, past values have less influence on the current observation.
+
+Increasing \(\phi_1\) to 0.6 improves the time series' persistence, resulting in stronger correlation with previous observations. The deviations from the mean are greater, and clusters of high or low values become more visible. The series still reverts to the mean, but at a slower rate. The effect of previous values being more pronounced.
+
+Setting \(\phi_1 = 0.9\) results in a highly persistent time series (phi is closer to 1 (random walk)). There are longer stretches of observations that remain above or below the mean, resulting in a more pronounced and smoother trend appearance. The values tend to stay in the same direction for longer periods of time before reverting to their mean. The previous value has a strong influence on the time series.
+
+\(\phi_1\) being negative (-0.6) causes the values to change sign more frequently, resulting in oscillating behavior around the mean. This is due to the negative autocorrelation introduced by \(\phi_1\). A positive deviation is more likely to be followed by a negative deviation, and vice versa.
+
+As the absolute value of \(\phi_1\) increases, the time series becomes more persistent, leading to smoother trends and longer correlated values. When \(\phi_1\) is positive, the series tends to follow the same direction as previous values, whereas a negative \(\phi_1\) causes more frequent reversals in direction, leading to an oscillating pattern.
+
+```{r plot_random}
+#Code to generate data
+simulate_ar1 <- function(phi_1, sigma2 = 1, n = 100, seed = 1254) {
+  set.seed(seed)
+  y <- numeric(n)
+  e <- rnorm(n, mean = 0, sd = sqrt(sigma2))
+  for(i in 2:n) {
+    y[i] <- phi_1 * y[i-1] + e[i]
+  }
+  return(tsibble(idx = seq_len(n), y = y, index = idx))
+}
+
+#Change phi_1 value
+phi_values <- c(0.2, 0.6, 0.9, -0.6)
+
+#Plots for different phi values
+plots <- lapply(phi_values, function(phi_1) {
+  sim <- simulate_ar1(phi_1)
+  autoplot(sim, y) +
+  labs(title = paste("AR(1) model with ϕ_1 =", phi_1))
+  })
+
+grid.arrange(grobs = plots, ncol = 2)
+```
+
+**c) Write your own code to generate data from an MA(1) model with \(\theta_1 = 0.6\) and \(\sigma^2 = 1\).**
+
+To generate data from an MA(1) model, the following equation is used:
+
+\[
+y_t = e_t + \theta_1 e_{t-1}
+\]
+
+where \(\theta_1\) is the moving average parameter, and \(e_t\) is white noise with mean zero and variance \(\sigma^2 = 1\).
+
+```{r ma_1}
+#Code to generate data MA(1)
+simulate_ma1 <- function(theta, sigma2 = 1, n = 100, seed = 1254) {
+  set.seed(seed)
+  y <- numeric(n) 
+  e <- rnorm(n, mean = 0, sd = sqrt(sigma2)) 
+  for (i in 2:n) {
+    y[i] <- theta * e[i - 1] + e[i]
+  }
+  return(tsibble(idx = seq_len(n), y = y, index = idx))
+}
+
+theta_1 <- 0.6
+
+#Generate MA(1) data
+sim_ma1 <- simulate_ma1(theta = theta_1)
+```
+
+**d) Produce a time plot for the series. How does the plot change as you change \(\theta_1\)?**
+
+For an MA(1) model: \(-1 < \theta_1 < 1\).
+
+When \(\theta_1 = 0.2\), the previous error term doesnt have much influence. This results in a time series that resembles white noise, with rapid fluctuations around the mean. The plot depicts short-term dependencies, but they are weak and dissipate quickly, resulting in a more jagged appearance.
+
+Increasing \(\theta_1\) to 0.6 makes the impact of the previous error term more noticeable. The series shows stronger short-term persistence, with larger clusters of values moving in the same direction. This results in a slightly smoother appearance.
+
+Setting \(\theta_1 = 0.9\), the time series shows stronger short-term correlations. The previous error term has nearly as much influence as the current error term, resulting in more noticeable, long-term deviations from the mean. This makes the plot appear smoother, with more discernible patterns or clusters of data.
+
+\(\theta_1\) being negative (e.g., \(\theta_1 = -0.6\)) causes oscillating behavior, with positive deviations followed by negative deviations and vice versa. The negative value of \(\theta_1\) creates a negative correlation between consecutive values, resulting in a more noticeable alternation in the time series.
+
+As \(\theta_1\) increases, the time series becomes more persistent, resulting in smoother patterns and larger clusters of values. A positive \(\theta_1\) results in positive short-term correlations, while a negative \(\theta_1\) causes an alternating pattern due to negative autocorrelation.
+
+```{r plot_ma1}
+#Change θ_1 value
+theta_values <- c(0.2, 0.6, 0.9, -0.6)
+
+#Plots for different phi values
+plots <- lapply(theta_values, function(theta) {
+  sim <- simulate_ma1(theta)
+  autoplot(sim, y) +
+  labs(title = paste("MA(1) model with θ_1 =", theta))
+  })
+
+grid.arrange(grobs = plots, ncol = 2)
+```
+
+**e) Generate data from an ARMA(1,1) model with \(\phi_1 = 0.6\), \(\theta_1 = 0.6\), and \(\sigma^2 = 1\).**
+
+To generate data from an ARMA(1,1) model, the following equation is used:
+
+\[
+y_t = \phi_1 y_{t-1} + \theta_1 e_{t-1} + e_t
+\]
+
+where \(\phi_1\) is the AR parameter, \(\theta_1\) is the MA parameter, and \(e_t\) represents white noise with mean zero and variance \(\sigma^2 = 1\).
+
+The model combines features of the autoregressive and moving average processes. The plot shows the effects of both components. \(\phi_1 =0.6\) adds persistence to the time series, indicating that the current value is influenced by the previous value. This causes the data to form short-term trends or clusters, with high values followed by high values and low values by low values. The persistence is moderate, with \(\phi_1 = 0.6\), which is not too close to 1. \(\theta_1 =0.6) takes into account the impact of the previous error term on the current observation. With \(\theta_1 = 0.6\), the current value of the series depends not only on the prior observation but also on the previous error. This smoothes the noise and reduces sudden jumps in the data, producing short-term correlations and smoother transitions between clusters. Together, these parameters produce a time series that appears stationary, with fluctuations centered on a constant mean and relatively stable variance.
+
+```{r arma_11}
+#Code to generate data ARMA(1,1)
+simulate_arma11 <- function(phi, theta, sigma2 = 1, n = 100, seed = 1254) {
+  set.seed(seed)
+  y <- numeric(n) 
+  e <- rnorm(n, mean = 0, sd = sqrt(sigma2)) 
+  for (i in 2:n) {
+    y[i] <- phi * y[i-1] + theta * e[i - 1] + e[i]
+  }
+  return(tsibble(idx = seq_len(n), y = y, index = idx))
+}
+
+phi_1 <- 0.6
+theta_1 <- 0.6
+
+#Generate ARMA(1,1) data
+sim_arma11 <- simulate_arma11(phi = phi_1, theta = theta_1)
+
+#Plot series
+plot_arma11 <- autoplot(sim_arma11, y) +
+  labs(title = paste("ARMA(1,1) model with ϕ_1 =", phi_1, "and θ_1 =", theta_1)) 
+
+plot_arma11
+```
+
+**f) Generate data from an AR(2) model with$\phi_1 = -0.8$, $\phi_2 = 0.3$, and $\sigma^2 = 1$. (Note that these parameters will give a non-stationary series.)**
+
+To generate data from an AR(2) model, the following equation is used:
+
+\[
+y_t = \phi_1 y_{t-1} + \phi_2 y_{t-2} + e_t
+\]
+
+To ensure that both \(y_{t-1}\) and \(y_{t-2}\) are available, the AR(2) process begins at \(i=3\). These parameters give a non-stationary series. The plot shows oscillations that grow in amplitude over time. Such behavior suggests that the variance is not constant. In a stationary time series, the mean and variance should be relatively constant over time, but in this plot, the variance increases as time passes. The plot's oscillating pattern is caused by a negative value of \(\phi_1\), resulting in frequent sign changes.The positive value of \(\phi_2\) enhances the series' behavior by amplifying the effect of the second-lagged term. The stationarity condition for an AR(2) model requires the roots of the characteristic equation to be outside the unit circle. The parameters \(\phi_1\) and \(\phi_2\) do not meet this condition. To make the series stationary, we could use differencing to eliminate trends and stabilize the variance.
+
+```{r ar2}
+#Code to generate data
+simulate_ar2 <- function(phi_1, phi_2, sigma2 = 1, n = 100, seed = 1254) {
+  set.seed(seed)
+  y <- numeric(n)
+  e <- rnorm(n, mean = 0, sd = sqrt(sigma2))
+  for(i in 3:n) {
+    y[i] <- phi_1 * y[i-1] + phi_2 * y[i-2] + e[i]
+  }
+  return(tsibble(idx = seq_len(n), y = y, index = idx))
+}
+
+phi_1 <- -0.8
+phi_2 <- 0.3
+
+#Generate AR(2) data
+sim_ar2 <- simulate_ar2(phi_1 = phi_1, phi_2 = phi_2)
+
+#Plot series
+plot_ar2 <- autoplot(sim_ar2, y) +
+  labs(title = paste("AR(2) model with ϕ_1 =", phi_1, "and  ϕ_2 =", phi_2)) 
+
+plot_ar2
+```
+
+**g) Graph the latter two series and compare them.**
+
+The ARMA(1,1) model combines AR and MA characteristics. The AR component introduces persistence, causing values to follow the direction of previous values, this results in smoother trends. The MA component affects the series by incorporating short-term correlations based on past error terms. The overall effect is a stationary time series that oscillates around a constant mean with relatively stable variance over time.
+
+In contrast, the AR(2) model generates a non-stationary time series,  resulting in a pattern of oscillations that increase in amplitude as time passes. The negative value of \(\phi_1\) causes frequent changes in direction, resulting in alternating signs in the series, while the positive value of \(\phi_2\) increases the influence of the second-lagged term. This combination causes the oscillations to increase in magnitude, resulting in a time series with greater variance and instability. 
+
+The primary distinction between the two models is their stationarity. The ARMA(1,1) series is stationary, with fluctuations around a constant mean and stable variance, whereas the AR(2) series exhibits non-stationary behavior, with growing oscillations and increasing variance over time.
+
+```{r arma_ar2}
+grid.arrange(plot_arma11, plot_ar2, ncol = 1)
+```
+
+## Exercise 9.7
+
+Consider aus_airpassengers, the total number of passengers (in millions) from Australian air carriers for the period 1970-2011.
+
+**a) Use ARIMA() to find an appropriate ARIMA model. What model was selected. Check that the residuals look like white noise. Plot forecasts for the next 10 periods.**
+
+The original plot shows an increasing trend over time (the data is not stationary), which is obvious as there is an increasing with time demand for air travel. Because the data is annual, we do not see significant seasonal fluctuations.
+
+We used the ARIMA() function to identify an appropriate model ARIMA(0, 2, 1). This model does not have any autoregressive terms (p=0), but has a second-order differencing (d=2) to stabilize the increasing trend, and one moving average term (q=1). The coefficient for the MA(1) term is -0.8756 with a standard error of 0.0722, sigma^2 is 4.671, AIC is AIC=179.61, which indicates a good fit to the data. The residuals appear to be centered around zero, with no discernible patterns, the residuals look like white noise. The ACF plot of the residuals also shows no significant autocorrelations. The Ljung-Box test statistic yielded a p-value of 0.815, indicating no significant autocorrelation in the residuals (p > 0.05).
+
+Finally, the model was used to forecast the total number of passengers over the next ten periods (2012-2021). Forecasted values shows a steady increase in passengers based on the plot below.
+
+```{r arima_passangers}
+#Filter data
+aus_air <- aus_airpassengers %>%
+  filter(Year <= 2011)
+
+#Plot data
+autoplot(aus_air) +
+  labs(y="# of passangers (in millions)", title="The total number of passengers from \nAustralian air carriers, 1970-2011")
+
+
+#ARIMA(0,2,1), ma1: -0.8756, s.e. 0.0722, sigma^2 estimated as 4.671:log likelihood=-87.8, AIC=179.61,AICc=179.93,BIC=182.99
+fit_021 <- aus_air %>%
+  model(ARIMA(Passengers))
+
+report(fit_021)
+
+#Check the residuals
+gg_tsresiduals(fit_021)
+
+#Ljung-Box test 
+fit_021 %>% 
+  augment() %>%  features(.innov, ljung_box, lag = 10)
+
+#Forecasts for the next 10 periods
+fc_021 <- fit_021 %>% forecast::forecast(h = 10) 
+
+fc_021 %>% autoplot(aus_airpassengers) +
+  labs(y="# of passangers (in millions)", title="The total number of passengers \nwith forecast ARIMA(0,2,1) up to 2021")
+```
+
+
+**b) Write the model in terms of the backshift operator.**
+
+To represent the model's two levels of differencing (d=2), we use the backshift operator (B):
+
+\[
+(1 - B)^2 y_t 
+\]
+
+The moving average part of the model with one lag (q=1, the standard convention for ARIMA models is that the MA part is written with a minus sign):
+
+\[
+(1 - \theta_1 B) \epsilon_t
+\]
+
+
+ARIMA(0, 2, 1) model in terms of the backshift operator:
+
+\[
+(1 - B)^2 y_t = (1 - \theta_1 B) \epsilon_t
+\]
+
+\[
+(1 - B)^2 y_t = (1 + 0.8756 B) \epsilon_t
+\]
+
+
+**c) Plot forecasts from an ARIMA(0,1,0) model with drift and compare these to part a.**
+
+We used an ARIMA(0, 1, 0) model with drift. To achieve stationarity, the data is differenced once (d=1), and a drift term is added to account for the overall trend. The constant coefficient is 1.3669 with a standard error of 0.3319, and the model has a sigma^2 value of 4.629, AIC value is 182.17, which is greater than that of ARIMA(0, 2, 1) (AIC = 179.61), implying that this model may not be as well fitted. The residuals are centered around zero with no discernible patterns, the residuals behave like white noise. The ACF plot also reveals no significant autocorrelations. The Ljung-Box test statistic yielded a p-value of 0.897, indicating no significant autocorrelation in the residuals (p > 0.05).
+
+The ARIMA(0, 1, 0) with drift forecasts a steady, linear increase in the number of passengers, there is the presence of a drift term (forecasts are below actual data). The ARIMA(0, 2, 1) model predicts a more aggressive increase in passengers (forecasts are above actual data). The ARIMA(0, 2, 1) model appears to offer a better fit to the data, as evidenced by its lower AIC value and more detailed representation of the data’s variability, resulting in a steeper and potentially more realistic forecast of future passengers. On the other hand, the ARIMA(0, 1, 0) with drift model provides a simpler, linear forecast, which might be more appropriate if a constant trend is expected without major changes in the underlying dynamics.
+
+```{r arima_010}
+#ARIMA(0,1,0) with drift, ma1: 1.3669, s.e. 0.3319, sigma^2 estimated as 4.629:log likelihood=-89.08, AIC=182.17, #AICc=182.48, BIC=185.59
+fit_010 <- aus_air %>%
+  model(ARIMA(Passengers ~ pdq(0,1,0)))
+
+report(fit_010)
+
+#Check the residuals
+gg_tsresiduals(fit_010)
+
+#Ljung-Box test 
+fit_010 %>% 
+  augment() %>%  features(.innov, ljung_box, lag = 10)
+
+#Forecasts for the next 10 periods
+fc_010 <- fit_010 %>% forecast::forecast(h = 10) 
+
+fc_010 %>% autoplot(aus_airpassengers) +
+  labs(y="# of passangers (in millions)", title="The total number of passengers \nwith forecast ARIMA(0,1,0) up to 2021")
+```
+
+**d) Plot forecasts from an ARIMA(2,1,2) model with drift and compare these to parts a and c. Remove the constant and see what happens.**
+
+The model has two AR terms, two MA terms, and a drift term.
+
+ARIMA(2, 1, 2) coefficients: AR1 is 1.4694, AR2 is -0.5103. MA1 is -1.5736, MA2 is 0.6780. The drift term is 0.065, indicating a consistent upward trend in air passenger numbers over time. The standard errors for each of these coefficients are small. AIC value is 187.47, it shows that the model is a good fit for the data. The residuals are centered around zero, and there are no significant autocorrelations at any lag on the ACF plot, which confirms that the residuals look like white noise. The Ljung-Box test statistic yielded a p-value of 0.987, indicating no significant autocorrelation in the residuals (p > 0.05).
+
+ARIMA(0, 1, 0) with drift generates the lowest forecast with the slowest increase in passenger volume, the most conservative growth trajectory. ARIMA(0, 2, 1) predicts the greatest increase in passenger numbers, reflecting the higher volatility and dynamics captured in the data. It assumes a faster growth rate than the other models.
+
+ARIMA(2, 1, 2) with drift model's forecasts falls between the other two. The ARIMA(0, 1, 0) model produces the most conservative forecast, whereas the ARIMA(0, 2, 1) model predicts the most aggressive passenger growth. The ARIMA(2, 1, 2) model achieves a balance between the two, capturing both short-term dynamics and long-term trends. The ARIMA(0, 2, 1) model has the lowest AIC (AIC=179.61), however, its aggressive forecast may be overly optimistic. The ARIMA(2, 1, 2) model, while having a slightly higher AIC (187.47), provides a more moderate forecast when considering both the trend and data fluctuations.
+
+When fitting an ARIMA(2, 1, 2) model without the constant, a non-stationary AR part warning was encountered, indicating that the model is not stationary and thus not suitable for differencing or drift. Removing the drift term from the ARIMA(2, 1, 2) model results in an unstable model, emphasizing the significance of the drift component in ensuring a stable and reliable forecast.
+
+```{r arima_212}
+#ARIMA(2,1,2) with drift, ar1=1.4694, ar2=-0.5103, ma1=-1.5736, ma2=0.6780, constant=0.065, s.e.: 0.3780, 0.3558, 0.3081, 0.2688, 0.0294, sigma^2 #estimated as 4.748:log likelihood=-87.74, AIC=187.47, AICc=189.94, BIC=197.75
+fit_212 <- aus_air %>%
+  model(model_212 = ARIMA(Passengers ~ pdq(2,1,2)),
+        model_021 = ARIMA(Passengers), 
+        model_010 = ARIMA(Passengers ~ pdq(0,1,0)))
+
+fit_212 %>% select(model_212) %>%
+  report()
+
+#Check the residuals
+fit_212 %>% select(model_212) %>% gg_tsresiduals()
+
+#Ljung-Box test 
+fit_212 %>% select(model_212) %>%  
+  augment() %>%  features(.innov, ljung_box, lag = 10)
+
+#Forecasts for the next 10 periods
+fc_212 <- fit_212 %>% forecast::forecast(h = 10) 
+
+df <- aus_airpassengers %>%
+  filter(Year >=2000)
+
+fc_212 %>% autoplot(df, level=NULL) +
+  labs(y="# of passangers (in millions)", title="The total number of passengers \nwith forecast up to 2021")+
+  scale_color_manual(values = c("red", "purple", "blue"), labels = c("0,1,0", "0,2,1", "2,1,2"))
+
+fit_212_noconst <- aus_air %>%
+  model(ARIMA(Passengers ~ 0 + pdq(2,1,2)))
+```
+
+**e) Plot forecasts from an ARIMA(0,2,1) model with a constant. What happens?**
+
+When fitting an ARIMA(0, 2, 1) model with a constant, a warning was generated indicating that the model specification caused a quadratic or higher-order polynomial trend. Adding a constant to this model, which already has two differences (d=2), results in a faster-than-linear trend over time. It is better to avoid it, as it may lead to unrealistic forecasts due to the excessive growth trend. The results for the model:MA(1) = -1 (s.e. = 0.0709), constant = 0.0721 (s.e. = 0.0260), AIC = 177.48. The AIC is lower than in earlier models without a constant, however, this fit has the disadvantage of introducing an unrealistic long-term trend. The residuals are scattered around zero, with no discernible long-term trends. The ACF plot shows no significant autocorrelations, indicating that the residuals look like white noise. The Ljung-Box test statistic yielded a p-value of 0.799, indicating no significant autocorrelation in the residuals (p > 0.05).
+
+The MA(1) is -1 which means that the error from one period prior is perfectly inverted in the current period. An MA coefficient at the boundary (absolute value of 1) indicates non-invertibility. It means that the model is having difficulty accurately capturing the underlying data-generation process. This is frequently associated with over-differencing or a poor choice of model structure. ARIMA(0, 2, 1) without constant predicts a gradual but more realistic increase in passenger numbers. ARIMA(0, 2, 1) with constant shows an accelerated, quadratic growth that is uncharacteristic for this type of data. Differentiation removes linear trends, but constants reintroduce them, and because we differ twice, the trend becomes quadratic rather than linear.
+
+```{r arima_021_const}
+#ARIMA(0,2,1) with constant, ma1: -0.1, constant=0.0721, s.e.: 0.0709, 0.0260, sigma^2 estimated as 4.086:log likelihood=-85.74, AIC=177.48,AICc=178.15,BIC=182.55
+fit_021_const <- aus_air %>%
+  model(model_021_const = ARIMA(Passengers ~ 1+ pdq(0,2,1)),
+        model_021 = ARIMA(Passengers ~ pdq(0,2,1)))
+
+fit_021_const %>% select(model_021_const) %>%
+  report()
+
+#Check the residuals
+fit_021_const %>% select(model_021_const) %>% gg_tsresiduals()
+
+#Ljung-Box test 
+fit_021_const %>% select(model_021_const) %>%  
+  augment() %>%  features(.innov, ljung_box, lag = 10)
+
+
+#Forecasts for the next 10 periods
+fc_021_const <- fit_021_const %>% forecast::forecast(h = 10) 
+
+fc_021_const %>% autoplot(aus_airpassengers, level=NULL) +
+  labs(y="# of passangers (in millions)", title="The total number of passengers \nwith forecast up to 2021") +
+  scale_color_manual(values = c("green", "darkblue"), labels = c("0,2,1", "0,2,1 with const"))
+```
+
+## Exercise 9.8
+
+For the United States GDP series (from global_economy):
+
+**a) If necessary, find a suitable Box-Cox transformation for the data;**
+
+The plot for the GDP series shows an exponential growth, with increasing variance as GDP rises (a transformation may be required to stabilize the variance). ACF Plot shows a slow decay which indicates non-stationarity (a transformation or differencing may be required prior to fitting an ARIMA model). The PACF plot shows a sharp drop after lag 1, indicating a significant AR component.  
+
+The Box-Cox transformation is used here to reduce variance and improve the suitability of the data for the ARIMA model. The lambda value (using the Guerrero method) is 0.282. After applying the Box-Cox transformation, the variance appears more stable, but the trend persists. This confirms that first-order differencing will be required to eliminate the trend and achieve stationarity prior to fitting a model.
+
+```{r boxcox_usa_gdp}
+#Filter data
+gdp_df <- global_economy %>%
+  filter(Country == "United States") 
+
+#Check if BoX-Cox is needed
+#Plot data
+gdp_df |> 
+  gg_tsdisplay(GDP, plot_type="partial") +
+  labs(y="GDP, $USD", title="Original USA Gross domestic product, 1960 - 2017") 
+
+#Box-Cox lambda 0.282
+lambda <- gdp_df%>%
+  features(GDP, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#Box-Cox transformation
+gdp_df <- gdp_df %>%
+    mutate(boxcox_gdp = box_cox(GDP, lambda))
+
+#After Box-Cox transformation
+#Plot data
+gdp_df |> 
+  gg_tsdisplay(boxcox_gdp, plot_type="partial") +
+  labs(y="Box-Cox GDP", title="Transformed USA Gross domestic product, λ = 0.282, 1960 - 2017")
+```
+
+**b) Fit a suitable ARIMA model to the transformed data using ARIMA();**
+
+The ARIMA(1,1,0) with drift model is applied to the transformed data. This model includes a first-order differencing component to handle the data's trend, as well as an AR(1) term to capture short-term dependencies between consecutive observations. AR(1) is 0.4586 (standard error = 0.1198). The constant is 118.1822 (standard error = 9.5047). AIC is 656.65, the model captures the data's structure fairly well. RMSE is 72.1, the model is reasonably accurate at predicting future values of the series. MAE is 54.3, the model is reasonably accurate in forecasting the transformed data. The residuals plot oscillates randomly around zero, with no discernible pattern or trend, the residuals look like white noise. The ACF plot shows no significant autocorrelation at any lag, the model accurately captured the autocorrelation structure in the data. The residuals histogram is slightly skewed, indicating that, while the residuals generally follow a normal distribution, there may be minor deviations. The Ljung-Box test with the p-value of 0.955 (greater than 0.05) indicates that no significant autocorrelation remains.
+
+```{r arima_gdp}
+#ARIMA model
+fit <- gdp_df %>%
+  model(ARIMA(boxcox_gdp))
+
+#Optimal values: sigma^2 estimated as 5381:  log likelihood=-325.32, AIC=656.65, AICc=657.09, BIC=662.83
+report(fit)
+
+accuracy(fit)
+
+#Check residuals
+fit %>% 
+  gg_tsresiduals() 
+
+#Ljung-Box test 
+fit %>% 
+  augment() %>%  features(.innov, ljung_box, lag = 10)
+```
+
+**c) Try some other plausible models by experimenting with the orders chosen;**
+
+We tested several ARIMA models on the transformed data:
+
+ARIMA (1,1,1): AIC=659, RMSE=72.1, MAE=54.2, the residual ACF1 = -0.0197. The model has a slight improvement in MAE over ARIMA(1,1,0), but the AIC is slightly higher.
+
+ARIMA (2, 1, 0): AIC=659, RMSE=72.1, MAE=54.3, the residual ACF1 = -0.0204. The performance is similar to ARIMA(1,1,0), but with an extra AR term. The AIC is also higher, indicating no significant benefit.
+
+ARIMA(2,1,1): AIC=660, RMSE=71.8, MAE=53.6, the residual ACF1 = -0.00389. This model has the best RMSE and MAE, but it has a slightly higher AIC and is more complex. The residual autocorrelation is the lowest, making it the best option for forecasting.
+
+```{r arima_models}
+fit_models <- gdp_df %>%
+  model(model_110 = ARIMA(boxcox_gdp),
+        model_111 = ARIMA(boxcox_gdp ~ pdq(1,1,1)),
+        model_210 = ARIMA(boxcox_gdp ~ pdq(2,1,0)),
+        model_211 = ARIMA(boxcox_gdp ~ pdq(2,1,1)))
+
+accuracy(fit_models)
+report(fit_models)
+```
+
+**d) Choose what you think is the best model and check the residual diagnostics;**
+
+To prioritize prediction accuracy (RMSE and MAE), ARIMA(2,1,1) is the optimal option. It has the best RMSE and MAE, as well as minimal residual autocorrelation. If we value model simplicity (lower AIC and fewer parameters), ARIMA(1,1,0) is an excellent choice because it strikes a balance between accuracy and simplicity. Given the slightly higher accuracy of ARIMA(2,1,1), this would be the best overall forecasting model.
+
+The residuals from the ARIMA(2,1,1) model fluctuate around zero with no discernible pattern. The histogram has a slightly skewed distribution, but it is still fairly normal, which bodes well for the residuals. The ACF plot of the residuals shows no significant spikes outside of the confidence interval. The residuals are not autocorrelated and look like white noise. The Ljung-Box test statistic yielded a p-value of 0.951, indicating no significant autocorrelation in the residuals (p > 0.05).
+
+```{r arima_211}
+fit_model <- gdp_df %>%
+  model(ARIMA(boxcox_gdp ~ pdq(2,1,1)))
+
+#Check the residuals
+fit_model %>% gg_tsresiduals() 
+
+#Ljung-Box test 
+fit_model %>%   
+  augment() %>%  features(.innov, ljung_box, lag = 10)
+```
+
+**e) Produce forecasts of your fitted model. Do the forecasts look reasonable?**
+
+We generated forecasts for the  five years (up to 2022) using the ARIMA(2,1,1) model. Forecasted GDP values follow the upward trend, which is consistent with historical data. The forecasts appear reasonable, given the US GDP's historical upward trend. The forecast suggests continued growth, with no significant deviations from the trend observed over the past few decades.
+
+```{r arima211_fc}
+#Forecasts for the next 5 years
+fc <- fit_model %>% forecast::forecast(h = 5) 
+
+fc %>% autoplot(gdp_df) +
+  labs(y="GDP, $USD", title="USA Gross domestic product with \nARIMA(2,1,1) forecast until 2022") 
+```
+
+**f) Compare the results with what you would obtain using ETS() (with no transformation).**
+
+The ETS(M,A,N) model is used with the original GDP data, no transformations (a multiplicative error, an additive trend, no seasonality). The model's AIC (3190.79) is significantly higher than that of the ARIMA(2,1,1) model (AIC=660). The RMSE is 166,906 million USD, which is significantly higher than that of the ARIMA model (RMSE=71.8), indicating that ETS performs poorly on this data in terms of accuracy.
+The ETS model's forecasted values follow a similar upward trend as the historical data. In comparison to the ARIMA(2,1,1) model, the ETS model has higher uncertainty and lower accuracy metrics, despite providing a reasonable forecast. ARIMA(2,1,1) is the preferred model.
+```{r ets_vs_arima211}
+ets_model <- gdp_df %>%
+  model(ETS(GDP))
+
+accuracy(ets_model)
+report(ets_model)
+
+ets_model %>% gg_tsresiduals()
+
+ets_forecast <- ets_model %>% forecast::forecast(h = 5)
+
+ets_forecast %>%
+  autoplot(gdp_df) +
+  labs(y = "GDP, $USD", title = "USA Gross domestic product with \nETS forecast until 2022")
+```
