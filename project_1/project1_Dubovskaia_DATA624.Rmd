@@ -1,0 +1,1524 @@
+---
+title: "Project 1"
+author: "Daria Dubovskaia"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: hide
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+editor_options:
+  chunk_output_type: console
+  markdown:
+    wrap: sentence
+---
+
+
+```{r setup, message=FALSE, warning=FALSE}
+#chunks
+knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+#libraries
+library(tidyverse)
+library(fpp3)
+library(latex2exp)
+library(seasonal)
+library(GGally)
+library(gridExtra)
+library(reshape2)
+library(Hmisc)
+library(corrplot)
+library(e1071)
+library(caret)
+library(VIM)
+library(forecast)
+library(urca)
+library(aTSA)
+library(readxl)
+library(curl)
+library(lubridate)
+library(zoo)
+library(lmtest)
+#random seed
+set.seed(42)
+```
+
+## Part A – ATM Forecast
+
+In part A, I want you to forecast how much cash is taken out of 4 different ATM machines for May 2010.  The data is given in a single file.  The variable ‘Cash’ is provided in hundreds of dollars, other than that it is straight forward. I am being somewhat ambiguous on purpose to make this have a little more business feeling.  Explain and demonstrate your process, techniques used and not used, and your actual forecast. I am giving you data via an excel file, please provide your written report on your findings, visuals, discussion and your R code via an RPubs link along with the actual.rmd file  Also please submit the forecast which you will put in an Excel readable file.
+
+### 1. Load data
+
+The dataset `ATM624Data.xlsx` shows daily amount of cash taken out of 4 different ATM machines from May 2009 to April 2010. The data was straight taken from a GitHub source (to guarantee the availability of the data and repeatability of the analysis). An Excel file downloaded was housed in a temporary file location (curl_download() function) to guarantee that the file is only kept for the length of the analysis session and to avoid clutter of the working directory with pointless files. As the last step, the file was read to the data frame from this temporary location using read_xlsx() function, the date column is shown in the YYYY-MM-DD format.
+
+```{r load_atm_df}
+#Load data from Github
+
+#Github raw URL
+url <- "https://raw.githubusercontent.com/ex-pr/DATA624/main/project_1/ATM624Data.xlsx"
+
+#Create temporary file location and download file
+temp_loc <- tempfile(fileext = ".xlsx")
+curl_download(url, temp_loc)
+
+#Read the file from the temporary location
+df <- read_xlsx(temp_loc, col_types = c("date", "text", "numeric"))
+
+atm_df <- df  
+
+#Check first rows of data
+DT::datatable(
+      atm_df[1:25,],
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+```
+
+### 2. Exploratory Data Analysis, Data preprocessing
+
+#### 2.1 Summary statistics, Missing values
+
+The data contains the following columns: 
+
+`DATE`: The day, month, year of the withdrawal was made on;
+`ATM`: One of 4 ATMs withdrawals were made from;
+`Cash`: the target variable, cash withdrawals (in the hundreds of $USD).
+
+Next, we created summary statistics for each ATM to better understand the distribution of cash withdrawals. The summary includes the following values: minimum, first quartile (Q1), median, mean, third quartile (Q3), maximum, and standard deviation. ATM1 has a pretty stable withdrawal rate, with an average of about $8,400.
+ATM2 indicates slightly lower mean withdrawals, approximately $6,300.
+ATM3 stands out since the majority of withdrawals are zero, indicating relatively minimal activity with only a few outliers.
+ATM4 displays excessive withdrawal activity, with a maximum value of $1,092,000, which looks to be an aberration.
+
+There are 19 missing values where either the ATM or Cash columns contained NA values: missing values in the ATM and Cash columns in May 2010, as well as some scattered missing values for ATM1 and ATM2 in June 2009. The rows with missing values for  both the ATM and Cash columns in May 2010 were removed, because this is the time period for which we must create forecasts. Including them would not provide any useful information to the forecasting process. After, we had 5 missing values left in June 2009 for ATM1 and ATM2. These ATMs demonstrated a relatively stable and consistent pattern of withdrawals over time, making linear interpolation an appropriate method for imputing missing values. Before applying the interpolation, we displayed the data surrounding the missing values for ATM1 and ATM2 to ensure that linear interpolation was correct. We examined the days immediately preceding and following the missing values, confirming that the overall patterns were consistent. Linear interpolation guesses missing values by drawing a straight line between adjacent data points. This strategy is effective when the missing values are part of a continuous sequence, as was the case here. We also avoided introducing bias that could occur with more complex imputation approaches (for example, mean imputation or regression-based methods). After interpolation and removing rows for May 2010, there were no missing values in the dataset.
+
+The next step was to convert the dataset to a time-series format, which is required for time-series analysis and models such as ARIMA or ETS. The raw data we started with was in a conventional tabular format. However, time-series models demand that the data be organized and indexed chronologically, with a consistent temporal structure. The POSIXct format of the DATE column was converted to Date format to make the data more manageable for time-series functions. Because the data includes cash withdrawals from four different ATMs, we grouped it by the ATM column to ensure that each ATM's data is treated as a distinct time series. As a result, each ATM had its own series of daily cash withdrawals from May 2009 to April 2010.
+
+After, we visualized the time series for each ATM as well as the ACF and PACF  plots:
+
+Plot for ATM1 and ATM2 were extremely regular, with constant variations and evident patterns. The spikes in the ACF graphs show that the data has some autocorrelation at those specific lags. For example, we can see considerable rises at lags of 7 and 14 days. This could indicate a weekly pattern in withdrawals, which could be explained by behavioral trends such as people withdrawing money on the same day of the week (e.g., before weekends or after payday). The high jumps in the PACF indicate that recent data points influence present values. The spikes at lag 2 in the PACF for both ATMs show that the value from the previous day has a considerable impact on today's withdrawal amounts. The PACF shows a substantial jump at lag 7, corroborating the data's weekly periodicity. The presence of autocorrelation suggested that ARIMA models with autoregressive (AR) terms would probably perform well for these ATMs.
+
+Daily cash withdrawals from ATM1 showed periodic variations, with peaks and troughs at regular intervals. There was a distinct seasonality effect, with withdrawal quantities being higher on some days of the week (presumably weekdays) and lower on others (possibly weekends). The general trend was rather consistent throughout the year.
+
+Like ATM1, ATM2 displayed periodic variations with frequent peaks and falls, showing strong weekly seasonality. ATM2 had a somewhat lower average withdrawal amount than ATM1, but the patterns were similar.
+
+The ATM3 plot was essentially flat, with only a few days of activity. There are just three dates with withdrawls: 04/28/2010, 04/29/2010, and 04/30/2010; the remaining dates have values of 0. A forecast for ATM3 will not offer much value due to a lack of data. This demonstrated that ATM3 had low regular activity and that previous withdrawal values had little influence on future values. The lack of autocorrelation suggested that typical ARIMA models may not be appropriate for ATM3. ATM3 appears to be identical to ATM1 in terms of cash withdrawals for these 3 days ()
+
+Cash withdrawals at ATM4 were highly variable, with big spikes followed by periods of little activity. Withdrawals from this ATM were both frequent and variable, making modeling more difficult. The capped outlier reduced the most extreme spike, but the variability remained high. Even with the considerable variability, there was evidence of weekly seasonality. However, the trend component changed more than the other ATMs, indicating less consistency in overall cash demand at this location. The ACF and PACF plots for ATM4 indicated considerable autocorrelation, but it was less evident than in ATM1 and ATM2. The significant variability in the data made it difficult to find strong trends, while weekly periodicity was still evident in the lags. The oscillations in the ACF and PACF graphs indicated that ATM4's model may require a combination of autoregressive and moving average components.
+
+
+```{r analyze_atm_df}
+#Check data type
+str(atm_df)
+
+#Statistics for each ATM
+atm_df %>%
+  group_by(ATM) %>%    # Group the data by ATM
+  filter(!is.na(ATM)) %>% 
+  dplyr::summarize(
+    Min = min(Cash, na.rm = TRUE),
+    Q1 = quantile(Cash, 0.25, na.rm = TRUE),
+    Median = median(Cash, na.rm = TRUE),
+    Mean = mean(Cash, na.rm = TRUE),
+    Q3 = quantile(Cash, 0.75, na.rm = TRUE),
+    Max = max(Cash, na.rm = TRUE),
+    StdDev = sd(Cash, na.rm = TRUE)
+  )
+
+#Check NAs
+atm_df[!complete.cases(atm_df), ]
+
+#Remove May 2010 NA data
+atm_df <- atm_df %>% 
+  drop_na(ATM)
+
+#Filter NA rows for ATM1 and ATM2
+na_1 <- atm_df %>% filter(ATM == "ATM1" & is.na(Cash))
+na_2 <- atm_df %>% filter(ATM == "ATM2" & is.na(Cash))
+
+#Data around NA for ATM1
+data_na1 <- atm_df %>% filter(ATM == "ATM1") %>%
+  filter(DATE >= min(na_1$DATE) - 5 & DATE <= max(na_1$DATE) + 5)
+
+print("Data around NA for ATM1:")
+data_na1
+
+#Data around NA for ATM1
+data_na2 <- atm_df %>% filter(ATM == "ATM2") %>%
+  filter(DATE >= min(na_2$DATE) - 5 & DATE <= max(na_2$DATE) + 5)
+
+print("Data around NA for ATM2:")
+data_na2
+
+#Impute NA by linear interpol
+atm_df <- atm_df %>%
+  group_by(ATM) %>%
+  mutate(Cash = ifelse(is.na(Cash),
+                       zoo::na.approx(Cash, na.rm = FALSE), 
+                       Cash))
+
+#Any NA left
+sum(is.na(atm_df$Cash))
+
+#Transform to tsibble
+atm_df <- atm_df %>%
+  mutate(DATE= as.Date(DATE)) %>%
+  arrange(DATE) %>%
+  as_tsibble(index = DATE, key = ATM)
+
+#Split data by ATM for analysis
+atm_1 <- atm_df %>% filter(ATM == "ATM1")
+atm_2 <- atm_df %>% filter(ATM == "ATM2")
+atm_3 <- atm_df %>% filter(ATM == "ATM3")
+atm_4 <- atm_df %>% filter(ATM == "ATM4")
+
+#Plot data for ATM1
+atm_1 %>%
+  gg_tsdisplay(Cash, plot_type = "partial") +
+  labs(y = "withdrawal (hundreds of $USD)", title = "ATM 1 cash withdrawals, May 2009 - Apr 2010") 
+
+#Plot data for ATM2
+atm_2 %>%
+  gg_tsdisplay(Cash, plot_type = "partial") +
+  labs(y = "withdrawal (hundreds of $USD)", title = "ATM 2 cash withdrawals, May 2009 - Apr 2010")
+
+#Plot data for ATM3
+atm_3 %>%
+  gg_tsdisplay(Cash, plot_type = "partial") +
+  labs(y = "withdrawal (hundreds of $USD)", title = "ATM 3 cash withdrawals, May 2009 - Apr 2010")
+
+#Plot data for ATM4
+atm_4 %>%
+  gg_tsdisplay(Cash, plot_type = "partial") +
+  labs(y = "withdrawal (hundreds of $USD)", title = "ATM 4 cash withdrawals, May 2009 - Apr 2010")
+
+atm_1 |>
+  filter( DATE >= as.Date("2010-04-28") & DATE <= as.Date("2010-04-30") )
+
+atm_3 |>
+  filter( DATE >= as.Date("2010-04-28") & DATE <= as.Date("2010-04-30") )
+```
+
+
+#### 2.2 Outliers, STL decomposition, Tests
+
+To find outliers across ATMs, we used boxplots.
+
+ATM1 and ATM2: The distributions were rather compact, with a few moderate outliers on either end. Withdrawals from both ATMs were primarily clustered between $50 and 150, with only a few outliers above and below the interquartile range. These outliers, however, are not dramatic and are understandable given the variety in daily withdrawals.
+
+The cash withdrawal statistics for ATM3 displayed an unusual trend, with zeros dominating for the majority of the period and only two significant withdrawals of $100 and 96. This odd behavior was expected given the previously established skewness, and ATM3 is an outlier in terms of behavior, making it a particular case for future modeling.
+
+The most noticeable feature of the ATM4 boxplot is the extreme outlier of more than 10,000. This amount is clearly an outlier compared to the rest of the data, as the second largest withdrawal is substantially smaller (approximately $1712). We chose to cap this extreme outlier by replacing it with the second-highest number, ensuring that a single large withdrawal does not affect the general trend.
+
+The overall distribution has been somewhat adjusted by replacing the extreme outlier, although there are still obvious disparities in cash withdrawal values amongst ATMs. ATM 4 continues to offer a greater variety of withdrawal values than other ATMs. Without the severe outlier, the withdrawal distribution in ATM 4 exhibits more constant fluctuation within a normal range, making it simpler to detect potential autocorrelations or seasonal effects in the ACF and PACF plots. The ACF plot reveals that most autocorrelations are weak, with values hovering near 0 across the lags. This shows that the withdrawals are not strongly linked with their previous values, implying that the time series lacks substantial autocorrelations or repeated patterns over time. The PACF plot shows similar characteristics, with weak partial autocorrelations at all lags except for a minor spike at lag 7. This may indicate a weak weekly effect, but it is insufficiently robust or persistent to support a large seasonal pattern.
+
+
+```{r outliers_atm}
+#Box-plot to check outliers
+atm_df %>% ggplot(aes(x = "", y = Cash)) +
+  geom_boxplot() + 
+  facet_wrap(~ ATM, scales = "free") +
+  labs(title = "Boxplot of ATM cash withdrawals, May 2009 - Apr 2010", x = "withdrawal (hundreds of $USD)", y = "Frequency")
+
+#Maximum withdrawal ATM4
+max_atm4 <- max(atm_df$Cash[df$ATM == "ATM4"], na.rm = TRUE)
+
+#The second highest withdrawal
+max_2_atm4 <- sort(atm_df$Cash[atm_df$ATM == "ATM4" & atm_df$Cash != max_atm4], decreasing = TRUE)[1]
+
+#Replace max outlier in ATM4 with the second max
+atm_df <- atm_df %>%
+  mutate(Cash = ifelse(ATM == "ATM4" & Cash == max_atm4, max_2_atm4, Cash))
+
+#Split again for plotting
+atm_1 <- atm_df %>% filter(ATM == "ATM1") %>% ungroup() %>% select(c(DATE, Cash)) %>% as_tsibble(index = DATE)
+atm_2 <- atm_df %>% filter(ATM == "ATM2") %>% ungroup() %>% select(c(DATE, Cash)) %>% as_tsibble(index = DATE)
+atm_3 <- atm_df %>% filter(ATM == "ATM3") %>% ungroup() %>% select(c(DATE, Cash)) %>% as_tsibble(index = DATE)
+atm_4 <- atm_df %>% filter(ATM == "ATM4") %>% ungroup() %>% select(c(DATE, Cash)) %>% as_tsibble(index = DATE) 
+
+atm_4 %>% ggplot(aes(x = "", y = Cash)) + 
+     geom_boxplot() + 
+     labs(title = "Boxplot of ATM 4 cash withdrawals, May 2009 - Apr 2010", y = "withdrawal (hundreds of $USD)") 
+
+atm_4 %>%
+     gg_tsdisplay(Cash, plot_type = "partial") +
+     labs(y = "withdrawal (hundreds of $USD)", title = "ATM 4 cash withdrawals, May 2009 - Apr 2010")
+```
+
+The decomposition of ATM cash withdrawal data aids in identifying the trend, seasonal components, and remainder. The STL decomposition was conducted during a 7-day seasonal frame in order to capture weekly patterns in cash withdrawals.
+
+For ATM 1, we notice a distinct seasonal trend in the seasonal component on a weekly basis, which is consistent with predictions given the fluctuation in cash withdrawals by day of week. The trend line varies throughout the year, with some noticeable reductions suggesting reduced cash withdrawals in specific months. This could refer to vacations or seasonal affects. The residual noise indicates that changes beyond the trend and seasonality are rather minimal.
+
+The decomposition of ATM 2 demonstrates a similar substantial weekly seasonal effect as the seasonal component. However, the trend line for ATM 2 indicates a small upward trajectory, indicating that usage is increasing over time, particularly near the end of the observation period. The remaining data has some noise but is mainly steady, and the breakdown efficiently isolates seasonality.
+
+The decomposition of ATM 3 is less instructive due to the low number of cash withdrawals reported. The seasonality is more or less flat, and the trend component is nearly zero for the majority of the period. This shows that ATM 3 was either underutilized or out of service for the most of the period. The remainder demonstrates a lack of major activity, resulting in a relatively uneventful decomposition.
+
+ATM 4 gives an intriguing situation. The trend component shows a progressive reduction over time, with a minor spike near the end of the period. The seasonal component, like the others, follows a distinct weekly pattern. However, the remainder is quite variable, particularly near the end of the observation period, indicating some outlier behavior. This corresponds to the extreme cash withdrawal that was previously recognized and replaced, confirming the anomalous spike in withdrawal activity at the time.
+
+
+```{r decomp_atm}
+#STL decomposition
+atm_1 %>%
+  model(STL(Cash ~ season(window = 7))) %>% 
+  components()  %>%
+  autoplot() + 
+  labs(title = "Decomposition of ATM 1 cash withdrawals, May 2009 - Apr 2010")
+
+#STL decomposition
+atm_2 %>%
+  model(STL(Cash ~ season(window = 7))) %>%
+  components()  %>%
+  autoplot() + 
+  labs(title = "Decomposition of ATM 2 cash withdrawals, May 2009 - Apr 2010")
+
+#STL decomposition
+atm_3 %>%
+  model(STL(Cash ~ season(window = 7))) %>%
+  components()  %>%
+  autoplot() + 
+  labs(title = "Decomposition of ATM 3 cash withdrawals, May 2009 - Apr 2010")
+
+#STL decomposition
+atm_4 %>%
+  model(STL(Cash ~ season(window = 7))) %>%
+  components()  %>%
+  autoplot() + 
+  labs(title = "Decomposition of ATM 4 cash withdrawals, May 2009 - Apr 2010")
+
+```
+
+ATM 1 has a negatively skewed cash withdrawal distribution (skewness = -0.719), indicating more frequent larger withdrawals and fewer smaller ones. The manner of distribution appears to be around the $100-150 USD range. The moderate negative skew indicates that using a Box-Cox transformation could improve normalcy and stabilize variance.
+
+ATM 2 has a very symmetric distribution with a skewness of -0.034, indicating no significant skew in either direction. Cash withdrawals are more evenly distributed, with a high of roughly $50-100 USD. The minimal skew indicates that a Box-Cox transformation is unlikely because the data is virtually symmetric.
+
+ATM 3 has a highly positive skew of 10.93, indicating that the machine was either underutilized or had few withdrawals for the majority of the time. Given the extreme positive skew, this data would benefit greatly from a Box-Cox adjustment to lessen the extreme non-normality.
+
+With a skewness of 0.719, ATM 4 has a somewhat positive skew distribution. There are more frequent smaller withdrawals, but there is a significant frequency of larger withdrawals (up to 9000 USD), resulting in a lengthy tail to the right of the distribution. Positive skew may benefit from a Box-Cox transformation, particularly in the presence of significant withdrawals and outliers.
+
+The ADF and KPSS tests indicate that ATM 1's cash withdrawal series is non-stationary at the 5-lag point (p-value > 0.05 for the KPSS test). This indicates that differencing is required to attain stationarity. The unitroot_ndiffs and unitroot_nsdiffs functions demonstrate that a single level of differencing is required to stabilize the mean, as is seasonal differencing.
+
+The ADF test for ATM 2 indicates stationarity with a p-value of 0.01, however the KPSS test shows some evidence of non-stationarity at lag 4. The unitroot_ndiffs and unitroot_nsdiffs functions indicate that ATM 2 requires one regular difference and one seasonal difference to be totally stationary.
+
+For ATM 3, the findings indicate that no differencing is necessary (ndiffs and nsdiffs are both zero). The series is relatively stationary on its own, as evidenced by the KPSS test, which shows no signs of non-stationarity. Given the lack of considerable activity in ATM3, as demonstrated by the decomposition and stationarity tests, additional modeling for this ATM would be of limited benefit. Therefore, we will not include ATM3 in the final projection."
+
+The test findings for ATM 4 indicate that no differencing is required. Both the ADF and the KPSS tests show that the series is already stationary, as evidenced by a p-value of less than 0.01 across all tests.
+
+```{r tests_atm}
+skewness(atm_1$Cash, na.rm = TRUE)
+skewness(atm_2$Cash, na.rm = TRUE)
+skewness(atm_3$Cash, na.rm = TRUE)
+skewness(atm_4$Cash, na.rm = TRUE)
+
+
+atm_df %>% ggplot(aes(x = Cash, fill = ATM)) +
+  geom_histogram(position = "dodge", bins = 30) +
+  facet_wrap(~ ATM, scales = "free") +
+  labs(title = "Distribution of ATM cash withdrawals", x = "withdrawal (hundreds of $USD)", y = "Frequency")
+
+
+#Box-Cox lambda 0.26
+lambda_1 <- atm_1 %>%
+  features(Cash, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#Box-Cox lambda 0.73
+lambda_2 <- atm_2 %>%
+  features(Cash, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#Box-Cox lambda 1.36
+lambda_3 <- atm_3 %>%
+  features(Cash, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#Box-Cox lambda -0.074
+lambda_4 <- atm_4 %>%
+  features(Cash, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#Check what differencing is needed
+atm_1 %>%
+  features(Cash, unitroot_ndiffs)
+
+atm_1 %>%
+  features(Cash, unitroot_nsdiffs)
+
+#Augmented Dickey-Fuller stationarity test
+adf.test(atm_1$Cash)
+kpss.test(atm_1$Cash)
+
+#Check what differencing is needed
+atm_2 %>%
+  features(Cash, unitroot_ndiffs)
+
+atm_2 %>%
+  features(Cash, unitroot_nsdiffs)
+
+#Augmented Dickey-Fuller stationarity test
+adf.test(atm_2$Cash)
+kpss.test(atm_2$Cash)
+
+#Check what differencing is needed
+atm_3 %>%
+  features(Cash, unitroot_ndiffs)
+
+atm_3 %>%
+  features(Cash, unitroot_nsdiffs)
+
+#Augmented Dickey-Fuller stationarity test
+adf.test(atm_3$Cash)
+kpss.test(atm_3$Cash)
+
+#Check what differencing is needed
+atm_4 %>%
+  features(Cash, unitroot_ndiffs)
+
+atm_4 %>%
+  features(Cash, unitroot_nsdiffs)
+
+#Augmented Dickey-Fuller stationarity test
+adf.test(atm_4$Cash)
+kpss.test(atm_4$Cash)
+```
+
+
+### 3. Model Selection
+
+#### 3.1 ATM 1
+
+We used a variety of time series models to predict withdrawls for May 2010. The purpose was to compare several models using important performance indicators such as RMSE, AIC, and residual analysis in order to choose the best performing model for predicting. 
+
+The Seasonal Naive (SNAIVE) Model: This model served as a baseline. It expects that future withdrawals would follow the same seasonal pattern as in prior weeks. RMSE=27.7, MAPE=116%, MASE=1. It demonstrates that it is the least advanced in precisely identifying the underlying patterns, significant inaccuracy is suggested by the high MAPE, particularly for bigger withdrawals. The residuals have considerable autocorrelation at lag 1 and beyond, as seen by the ACF plot, implying that the model did not fully capture the underlying patterns in the data. It is confirmed by the Ljung-Box tes, a p-value of 4.66e-15, indicating the presence of residual autocorrelation. Despite its simplicity and intuitiveness, this model failed to appropriately predict the data's trend and seasonality, as indicated by the relatively high RMSE and autocorrelation in residuals.
+
+The Exponential Smoothing State Space Model (ETS): we used an ETS(A,N,A) model, where "A" represents additive error and "N" denotes no trend or seasonality. This model was chosen to represent the time-varying seasonal pattern. RMSE=23.8, AIC=4487.018. The ETS model demonstrated difficulties with bigger variations in the data, but it outperformed the baseline in terms of scaled error, with a MAPE of 122% and a MASE of 0.852. The model's inability to capture volatility is indicated by the comparatively large MAPE. The residuals improved over the SNAIVE model, however autocorrelations remained strong at several lags. The Ljung-Box test yielded a p-value of 0.0025, indicating the presence of some residual autocorrelation. While the ETS model improves on the SNAIVE model, there is still potential for improvement, as indicated by the residual autocorrelations and moderate AIC values. 
+
+ARIMA: we used an ARIMA(0,0,1)(0,1,2)[7] model to capture the autoregressive and moving average components of the data, as well as the weekly seasonality. RMSE=23.3; AIC=3288.03. The ARIMA model improved both error scaling and symmetry, as seen by its decreased MAPE of 117% and MASE of 0.822. These results support ARIMA's superior fit over SNAIVE and ETS, especially when it comes to identifying seasonal trends with little residual autocorrelation. The residuals' ACF exhibited a lower autocorrelation than the ETS model. The Ljung-Box test yielded a p-value of 0.31, suggesting that the residuals were uncorrelated and that the model fit the data accurately. The ARIMA model outperformed both the SNAIVE and ETS models, as evidenced by the lowest RMSE and the lack of significant autocorrelation in the residuals. 
+
+ETS Model using Box-Cox Transformation: to address skewness in the data, we used a Box-Cox transformation (lambda = 0.26) and fitted an ETS model. The transformation reduces variance and increases residual normalcy. RMSE=24.9, AIC=2380. The ETS model's Box-Cox transformation contributed to variance stabilization, yielding a MASE of 0.898 and a MAPE of 111%. Even if the residual distribution was enhanced by this change, the MAPE's ability to successfully handle fluctuations was still limited. While the residuals showed a better distribution, the ACF and Ljung-Box tests revealed some autocorrelation (p-value = 0.0275). Although the AIC decreased dramatically following the Box-Cox transformation, the residuals still showed some autocorrelation, implying that this model may not fully capture seasonality and trend patterns.
+
+ARIMA Model with Box-Cox Transformation: Similar to the ETS model, we transformed the cash withdrawal data using Box-Cox and fitted an ARIMA(0,0,2)(0,1,1)[7] model. RMSE=24.9, AIC=1227.98. It was the most effective model in terms of error scaling and balanced forecasting, as evidenced by its lowest MAPE of 107% and MASE of 0.902. This model appears to have captured the patterns in the data the best, as evidenced by its decreased MAPE and less residual autocorrelation. The ACF plot showed minimal autocorrelation, and the Ljung-Box test yielded a p-value of 0.513, indicating that the residuals were well-modeled and uncorrelated. The Breusch-Pagan test yields a p-value of 0.692, which is significantly greater than the conventional significance level of 0.05. This implies that there is no significant evidence of heteroscedasticity in residuals. The assumption of constant variance (homoscedasticity) in the residuals is maintained, implying that the model is adequately stated in terms of variance stability. The ARIMA model with Box-Cox transformation had the best AIC value, indicating that it was the most efficient model. The residual analysis confirmed this, as there was no evidence of autocorrelation.
+
+```{r atm1_model}
+#Build models
+fit_model_1 <- atm_1 %>%
+  model(
+    #Baseline SNAIVE
+    snaive = SNAIVE(Cash ~ lag("week")), #RMSE=27.7
+    #ETS model
+    et = ETS(Cash), #ETS(A,N,A) AIC=4487.018 RMSE=23.8
+    #ARIMA model
+    ARIMA = ARIMA(Cash), #ARIMA(0,0,1)(0,1,2)[7] AIC=3288.03  RMSE=23.3
+    #ETS boxcox
+    et_bc = ETS(box_cox(Cash, lambda_1)), # ETS(A,N,A) AIC=2380 RMSE=24.9
+    # arima boxcox model
+    ARIMA_bc = ARIMA(box_cox(Cash, lambda_1))) #ARIMA(0,0,2)(0,1,1)[7]  AIC=1227.98  RMSE=24.9
+
+accuracy(fit_model_1)
+report(fit_model_1)
+
+fit_model_1 %>%
+  select("et") %>%
+  report()
+
+fit_model_1 %>%
+  select("ARIMA") %>%
+  report()
+
+fit_model_1 %>%
+  select("ARIMA_bc") %>%
+  report()
+
+# Loop through each model in fit_model and apply gg_tsresiduals
+models <- c("snaive", "et", "ARIMA", "et_bc", "ARIMA_bc")
+
+# Apply gg_tsresiduals() to each model and display residuals
+for (model in models) {
+  a <- gg_tsresiduals(fit_model_1 %>% select(all_of(model))) +
+  ggtitle(paste("Residuals for model ATM 1:", model))
+  
+  print(a)
+}
+
+#Ljung-Box test 
+fit_model_1 %>% 
+  augment() %>%  features(.innov, ljung_box, lag = 7)
+
+#Breusch-Pagan test 
+fit_arima1 <- fit_model_1 %>%
+  select("ARIMA_bc")
+residuals_arima1 <- residuals(fit_arima1) %>% pull(.resid)
+bptest(residuals_arima1 ~ seq_along(residuals_arima1), data = data.frame(residuals_arima1))
+```
+
+
+#### 3.2 ATM 2
+
+We used the same models for ATM 2 as for ATM 1.
+
+SNAIVE model: As a baseline, this model assumes future withdrawals will follow prior weekly patterns. With an RMSE of 30.2, the ACF plot shows considerable autocorrelation in residuals at several lags, indicating that underlying patterns were not adequately recorded. The Ljung-Box test p-value of 0 indicates substantial residual autocorrelation, confirming the model's limits in trend and seasonality prediction. ATM 2 has occasional days with zero withdrawals, this would lead to infinite or very large percentage errors when calculating MPE and MAPE results in MAPE, MASE being inf.
+
+ETS: We employed an ETS(A,N,A) model to capture time-varying seasonal impacts. The RMSE was 25.1, with an AIC of 4527.377. While residual autocorrelation improved as compared to SNAIVE, the Ljung-Box test (p-value = 0.0027) indicates residual autocorrelation. This model performed pretty well, with significant gains in capturing seasonality over SNAIVE.
+
+The ARIMA(2,0,2)(0,1,1)[7] model was used to capture autoregressive and moving average components, as well as weekly seasonality. With an RMSE of 24.1 and an AIC of 3319.33, the ACF and Ljung-Box tests (p-value = 0.43) reveal negligible residual autocorrelation, indicating a satisfactory model fit. This ARIMA model outperformed both SNAIVE and ETS because it better accounts for trend and seasonality.
+
+ETS Model with Box-Cox Transformation: To reduce variance and increase normalcy, a Box-Cox transformation (lambda = 0.73) was used. While the RMSE (25.4) and AIC (3728) dropped, residual autocorrelation remained, with a Ljung-Box p-value of 0.0027. Despite the improved residual distribution, autocorrelation persisted, showing a limited ability to capture seasonal trends entirely.
+
+ARIMA Model with Box-Cox Transformation: Similar to ETS, we used a Box-Cox transformation to fit an ARIMA(2,0,2)(0,1,1)[7] model, which yielded an RMSE of 24.5 and an AIC of 2539. The ACF plot revealed negligible autocorrelation, as evidenced by the Ljung-Box p-value of 0.33. Furthermore, the Breusch-Pagan test produced a p-value of 0.864, indicating no significant heteroscedasticity and confirming stable residual variance. The ARIMA Box-Cox model delivered the best results, with the lowest AIC, RMSE, and consistent residual diagnostics.
+
+
+```{r atm2_model}
+#Build models
+fit_model_2 <- atm_2 %>%
+  model(
+    #Baseline SNAIVE
+    snaive = SNAIVE(Cash ~ lag("week")), #RMSE=30.2
+    #ETS model
+    et = ETS(Cash), #ETS(A,N,A) AIC=4527.377 RMSE=25.1
+    #ARIMA model
+    ARIMA = ARIMA(Cash), #ARIMA(2,0,2)(0,1,1)[7]  AIC=3319.33  RMSE=24.1
+    #ETS boxcox
+    et_bc = ETS(box_cox(Cash, lambda_2)), # ETS(A,N,A) AIC=3728 RMSE=25.4
+    # arima boxcox model
+    ARIMA_bc = ARIMA(box_cox(Cash, lambda_2))) #ARIMA(2,0,2)(0,1,1)[7]  AIC=2539  RMSE=24.5
+
+accuracy(fit_model_2)
+report(fit_model_2)
+
+fit_model_2 %>%
+  select("et") %>%
+  report()
+
+fit_model_2 %>%
+  select("ARIMA") %>%
+  report()
+
+fit_model_2 %>%
+  select("ARIMA_bc") %>%
+  report()
+
+# Loop through each model in fit_model and apply gg_tsresiduals
+models <- c("snaive", "et", "ARIMA", "et_bc", "ARIMA_bc")
+
+# Apply gg_tsresiduals() to each model and display residuals
+for (model in models) {
+  a <- gg_tsresiduals(fit_model_2 %>% select(all_of(model))) +
+  ggtitle(paste("Residuals for model ATM 2:", model))
+  
+  print(a)
+}
+
+#Ljung-Box test 
+fit_model_2 %>% 
+  augment() %>%  features(.innov, ljung_box, lag = 7)
+
+
+#Breusch-Pagan test 
+fit_arima2 <- fit_model_2 %>%
+  select("ARIMA_bc")
+residuals_arima2 <- residuals(fit_arima2) %>% pull(.resid)
+bptest(residuals_arima2 ~ seq_along(residuals_arima2), data = data.frame(residuals_arima2))
+```
+
+#### 3.3 ATM 3
+
+ATM 3 is a potential candidate for removal from independent modeling because of its mirroring pattern with ATM 1. However, since we need to include ATM 3 in the forecast, we adopted a straightforward approach: using a mean model based on the three days in which cash withdrawals occurred. This method makes the assumption that subsequent withdrawals will adhere to the same mean value noted during these instances.
+
+In order to represent the non-zero withdrawal days, we used the MEAN model. Average=87.67, MAE=5.56, MPE=6.24, RMSE=6.02
+Because of the data structure's simplicity, the residual plot for this model displays very low residual values and no discernible autocorrelation. Because of the small number of data points and the model structure, the Ljung-Box and Breusch-Pagan tests were not relevant in this case.
+
+
+```{r atm3_model}
+#Build models
+fit_model_3 <- atm_3 %>%
+  filter(Cash != 0) %>%
+  model(MEAN(Cash))
+
+accuracy(fit_model_3)
+report(fit_model_3)
+
+gg_tsresiduals(fit_model_3) +
+  ggtitle(paste("Residuals for model ATM 3:"))
+```
+
+#### 3.4 ATM 4
+
+SNAIVE Model: Used as a benchmark, this model assumes that future withdrawals will follow the seasonal patterns observed in historical data. High values of MAPE = 447 and MASE = 1 suggest that the varied withdrawal patterns of ATM 4 have poor predictive power. This model yielded an RMSE of 460, with significant autocorrelation in the residuals, as seen in the ACF plot. The Ljung-Box test indicated significant autocorrelation, with a p-value near zero, suggesting that the SNAIVE model was insufficient in capturing ATM 4’s complex withdrawal patterns.
+
+ETS Model: Applied to account for seasonal components without an explicit trend, this ETS(A,N,A) model yielded an RMSE of 335 and an AIC of 6418. Although not entirely adjusted for ATM 4's volatility, MASE = 0.767 and MAPE = 564 are lower than SNAIVE and demonstrate some ability to manage seasonality. The residuals showed some improvement over the SNAIVE model, with reduced autocorrelation at several lags. However, the Ljung-Box test still returned a p-value of 0.339, suggesting residual correlation at certain lags. Although the ETS model improved upon SNAIVE, there was still a need for models with better seasonality handling.
+
+ARIMA Model: The ARIMA(0,0,0)(1,0,0)[7] model was tested for ATM 4 to capture both autoregressive and seasonal moving average components. This model yielded an RMSE of 351 and an AIC of 5321. Better values of MAPE = 579 and MASE = 0.835 indicate better management of trend and seasonality than SNAIVE and ETS. Residual diagnostics indicated minor autocorrelation, which was confirmed by a Ljung-Box p-value of 0.584, suggesting a reasonable fit. However, additional refinements were explored to address remaining variability.
+
+ETS with square root transformation: To stabilize variance and address skewness, an ETS model with a square root transformation was applied as Box-Cox lambda was 0.448. This model achieved an AIC of 3723 and RMSE of 349, showing improved residual variance homogeneity. It showed moderate progress with MAPE = 422 and MASE = 0.758, but residual dependencies suggest that more work needs to be done. The ACF plot for residuals showed reduced autocorrelation, though some lags remained significant. The Ljung-Box test result (p-value = 0.321) indicated better, though not ideal, residual independence. The square root transformation helped manage outliers' impact, but further improvement was still desired.
+
+ARIMA with square root transformation: The ARIMA(0,0,0)(2,0,0)[7] model with a square root transformation was applied as Box-Cox lambda was 0.448. It achieved low values for MAPE = 439 and MASE = 0.776, with an RMSE of 357 and the lowest AIC of 2640 among all tested models, indicating it is appropriate for capturing ATM 4's patterns. The residuals showed minimal autocorrelation, confirmed by a Ljung-Box test p-value of 0.608, suggesting that the model adequately captured the data's structure. Additionally, the Breusch-Pagan test yielded a p-value of 0.2376, indicating no significant evidence of heteroscedasticity in residuals, confirming constant variance assumptions.
+
+```{r atm4_model}
+#Build models
+fit_model_4 <- atm_4 %>%
+  model(
+    #Baseline SNAIVE
+    snaive = SNAIVE(Cash ~ lag("week")), #RMSE=460
+    #ETS model
+    et = ETS(Cash), #ETS(A,N,A) AIC=6418 RMSE=335
+    #ARIMA model
+    ARIMA = ARIMA(Cash), #ARIMA(0,0,0)(1,0,0)[7] w/ mean  AIC=5321  RMSE=351
+    #ETS boxcox
+    et_sqrt = ETS(sqrt(Cash)), # ETS(M,N,A) AIC=3722.658 RMSE=349
+    # arima boxcox model
+    ARIMA_sqrt = ARIMA(sqrt(Cash))) #ARIMA(0,0,0)(2,0,0)[7] w/ mean AIC=2639.62  RMSE=357
+
+accuracy(fit_model_4)
+report(fit_model_4)
+
+fit_model_4 %>%
+  select("et") %>%
+  report()
+
+fit_model_4 %>%
+  select("et_sqrt") %>%
+  report()
+
+fit_model_4 %>%
+  select("ARIMA") %>%
+  report()
+
+fit_model_4 %>%
+  select("ARIMA_sqrt") %>%
+  report()
+
+# Loop through each model in fit_model and apply gg_tsresiduals
+models <- c("snaive", "et", "ARIMA", "et_sqrt", "ARIMA_sqrt")
+
+# Apply gg_tsresiduals() to each model and display residuals
+for (model in models) {
+  a <- gg_tsresiduals(fit_model_4 %>% select(all_of(model))) +
+  ggtitle(paste("Residuals for model ATM 4:", model))
+  
+  print(a)
+}
+
+#Ljung-Box test 
+fit_model_4 %>% 
+  augment() %>%  features(.innov, ljung_box, lag = 7)
+
+
+#Breusch-Pagan test 
+fit_arima4 <- fit_model_4 %>%
+  select("ARIMA_sqrt")
+residuals_arima4 <- residuals(fit_arima4) %>% pull(.resid)
+bptest(residuals_arima4 ~ seq_along(residuals_arima4), data = data.frame(residuals_arima4))
+```
+
+### 4. Forecast for May 2010
+
+#### 4.1 Forecast ATM 1
+
+ARIMA and ARIMA_bc produce a smooth and steady forecast that closely resembles previous seasonal patterns. ETS models  have slightly higher variability, indicating greater susceptibility to data variations. The SNAIVE model (gray) simply replicates numbers from the previous season. For the final projections, we utilized the ARIMA model with Box-Cox transformation, which performed better in terms of AIC, RMSE, and residual diagnostics. The estimated daily withdrawals are shown below in hundreds of USD dollars. In May 2010, ATM1 was forecasted to be worth ~2576.47 (in hundreds of $USD). The graph below shows the May 2010 forecasts from various models (SNAIVE, ETS, ARIMA, ETS Box-Cox, ARIMA Box-Cox) placed over 2009 historical data.
+
+```{r fc_atm1}
+#Forecast 
+fc_1 <- fit_model_1 %>% forecast::forecast(h = 31)
+
+atm_1_2010 <- atm_1 %>% filter(year(DATE) > 2009)
+#Plot forecasts
+fc_1|>
+  autoplot(atm_1_2010, level=NULL) +
+  labs(y="withdrawal (hundreds of $USD)", title="ATM 1 cash withdrawals with forecast for May 2010") +
+  facet_grid(.model~.) +
+  scale_color_manual(values = c("red", "purple", "blue", "lightblue", "pink"))
+
+fc_atm1 <- fc_1 %>% 
+  filter(.model == "ARIMA_bc") %>% 
+  as_tibble() %>%  
+  select(DATE, .mean)
+
+head(fc_atm1)
+may_atm1 <- sum(fc_atm1$.mean, na.rm = TRUE)
+may_atm1
+
+colnames(fc_atm1) <- c('Date', 'Cash')
+```
+
+
+#### 4.2 Forecast ATM 2
+
+The ARIMA and ARIMA Box-Cox models produced smooth, consistent projections that closely matched historical patterns and had less variability than ETS models. The SNAIVE model essentially duplicated previous season values. We chose the ARIMA model with Box-Cox transformation for final forecasts due to its superior RMSE, AIC, and residual features. The total withdrawals for May 2010 were estimated at ~1853.75 USD.
+
+```{r fc_atm2}
+#Forecast 
+fc_2 <- fit_model_2 %>% forecast::forecast(h = 31)
+
+atm_2_2010 <- atm_2 %>% filter(year(DATE) > 2009)
+#Plot forecasts
+fc_2|>
+  autoplot(atm_2_2010, level=NULL) +
+  labs(y="withdrawal (hundreds of $USD)", title="ATM 2 cash withdrawals with forecast for May 2010") +
+  facet_grid(.model~.) +
+  scale_color_manual(values = c("red", "purple", "blue", "lightblue", "pink"))
+
+fc_atm2 <- fc_2 %>% 
+  filter(.model == "ARIMA_bc") %>% 
+  as_tibble() %>%  
+  select(DATE, .mean)
+
+
+
+head(fc_atm2)
+may_atm2 <- sum(fc_atm2$.mean, na.rm = TRUE)
+may_atm2
+
+colnames(fc_atm2) <- c('Date', 'Cash')
+```
+
+#### 4.3 Forecast ATM 3
+
+Based on this methodology, the May 2010 prediction projects an average daily withdrawal of roughly 87.7 (in hundreds of USD), which adds up to an anticipated 2,717.67 (in hundreds of USD) in cash withdrawals for the month of May.
+
+```{r fc_atm3}
+#Forecast 
+fc_3 <- fit_model_3 %>% forecast::forecast(h = 31)
+
+atm_3_2010 <- atm_3 %>% filter(year(DATE) > 2009)
+#Plot forecasts
+fc_3 |>
+  autoplot(atm_3_2010, level=NULL) +
+  labs(y="withdrawal (hundreds of $USD)", title="ATM 3 cash withdrawals with forecast for May 2010") 
+
+fc_atm3 <- fc_3 %>% 
+  as_tibble() %>%  
+  select(DATE, .mean) 
+
+head(fc_atm3)
+may_atm3 <- sum(fc_atm3$.mean, na.rm = TRUE)
+may_atm3
+
+colnames(fc_atm3) <- c('Date', 'Cash')
+```
+
+#### 4.4 Forecast ATM 4
+
+The forecasts produced by the ARIMA and ARIMA with square root transformation models were steady and smooth, closely matching the seasonal patterns observed in the historical data. These models were suitable for forecasting ATM 4's steady cash withdrawal behavior since they were able to identify the important trends while reducing excess variance. Higher levels of variability were shown by ETS and ETS with Square Root Transformation models, suggesting that they are more susceptible to seasonal fluctuations. These models still had some autocorrelation, which reduced their predictive consistency even though the square root transformation assisted in lowering residual variance. A simple duplicate of the previous season's numbers was generated by the SNAIVE Model. The SNAIVE model was used as a baseline, but because of its poor ability to account for noise or adapt to current events, its predictions were less reliable. Based on the model evaluations, we chose the ARIMA model with Square Root transformation as the best-performing model for projecting ATM 4 cash withdrawals. This model had the lowest AIC (2640) and gave consistent residual diagnostics, including no substantial autocorrelation or heteroscedasticity, as confirmed by the Ljung-Box and Breusch-Pagan tests, respectively. The chosen ARIMA model with Square Root transformation estimated total withdrawals for May 2010 at 12,975.52 (in hundreds of USD).
+
+
+```{r fc_atm4}
+#Forecast 
+fc_4 <- fit_model_4 %>% forecast::forecast(h = 31)
+atm_4_2010 <- atm_4 %>% filter(year(DATE) > 2009)
+
+#Plot forecasts
+fc_4 |>
+  autoplot(atm_4_2010, level=NULL) +
+  labs(y="withdrawal (hundreds of $USD)", title="ATM 4 cash withdrawals with forecast for May 2010") +
+  facet_grid(.model~.) +
+  scale_color_manual(values = c("red", "purple", "blue", "lightblue", "pink"))
+
+fc_atm4 <- fc_4 %>% 
+  filter(.model == "ARIMA_sqrt") %>% 
+  as_tibble() %>%  
+  select(DATE, .mean) 
+
+head(fc_atm4)
+may_atm4 <- sum(fc_atm4$.mean, na.rm = TRUE)
+may_atm4
+
+colnames(fc_atm4) <- c('Date', 'Cash')
+
+```
+
+### 5. Conclusion
+
+The purpose of this study was to use data from four ATMs to predict cash withdrawals from ATMs in May 2010. In order to comprehend seasonal and trend patterns in cash withdrawals, we investigated a number of models, including SNAIVE, ETS, ARIMA, and variants with Box-Cox transformations. In order to determine which models produced the most accurate and consistent forecasts for each ATM, we assessed the models using important metrics as RMSE, AIC, MASE, and residual diagnostics.
+
+As a baseline, the SNAIVE model demonstrated excessive autocorrelation and residual errors across ATMs, making it inadequate for capturing complex patterns. While some autocorrelation persisted, ETS models outperformed SNAIVE in capturing seasonal fluctuations. According to Ljung-Box tests, ARIMA models consistently offered the greatest fit, with decreased RMSE and less residual autocorrelation, especially when combined with Box-Cox transformations. Because it stabilized variance and generated accurate forecasts, ARIMA with Box-Cox transformation was selected as the final model for ATMs with high withdrawal variability.
+
+Due to its low annual activity—withdrawals only occurring on three days that aligned with ATM 1's transactions—ATM 3 posed particular difficulties. For May 2010 estimates, a straightforward mean model based on the observed withdrawal days was adequate, negating the need for independent modeling for ATM 3 due to this dependency and the scarcity of data.
+
+Future initiatives to improve forecast accuracy could involve: including elements to cater for particular behavioral patterns, such as weekend or holiday indicators; taking into account further accuracy measures, like sMAPE, to evaluate over- and under-forecasting fairly; as well as trying more advanced modeling and/or feature engineering techniques.
+
+
+
+## Part B – Forecasting Power
+
+Part B consists of a simple dataset of residential power usage for January 1998 until December 2013.  Your assignment is to model these data and a monthly forecast for 2014.  The data is given in a single file.  The variable ‘KWH’ is power consumption in Kilowatt hours, the rest is straight forward. Add this to your existing files above. 
+
+### 1. Load data
+
+The dataset `ResidentialCustomerForecast Load-624.xlsx` shows monthly residential power consumption expressed in kilowatt-hours (KWH) from January 1998 through December 2013. The data was straight taken from a GitHub source (to guarantee the availability of the data and repeatability of the analysis). An Excel file downloaded was housed in a temporary file location (curl_download() function) to guarantee that the file is only kept for the length of the analysis session and to avoid clutter of the working directory with pointless files. As the last step, the file was read to the data frame from this temporary location using read_xlsx() function.
+
+```{r load_power_df}
+#Load data from Github
+
+#Github raw URL
+url <- "https://raw.githubusercontent.com/ex-pr/DATA624/main/project_1/ResidentialCustomerForecastLoad-624.xlsx"
+
+#Create temporary file location and download file
+temp_loc <- tempfile(fileext = ".xlsx")
+curl_download(url, temp_loc)
+
+#Read the file from the temporary location
+df <- read_xlsx(temp_loc)
+
+#Copy data
+power_df <- df
+
+# Check first rows of data
+DT::datatable(
+      power_df[1:25,],
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+```
+
+
+### 2. Exploratory Data Analysis, Data preprocessing
+
+#### 2.1 Summary statistics, Missing values
+
+The data contains the following columns: 
+
+`Case Sequential`: Every case has a numerical identification.
+`YYYY-MMM`: The year and month the power usage data falls in.
+`KWH`: the target variable is kilowatt-hours, the electricity consumption.
+
+We first concentrated on correctly formatting the date column (YYYY-MMM). Treatment of the date column as a time-based variable rather than a string is required as the data shows monthly power consumption. Analyzing and forecasting the data over time requires a time series structure, thus once the date column was converted, the dataset was transformed to tsibble. It'll allow the dataset to be indexed by the date for further identification of trends, seasonality, and other patterns.
+
+Next, we checked KWH variable summary statistics. According the summary, there is one missing value in the dataset in September 2008. While the maximum was more than 10.6 million KWH, the least usage noted was almost 770,523 KWH (this minimum value might be an outlier, we should watch out for this observation). About 6.5 million and 6.3 million KWH respectively were the mean and median electricity consumption. 
+
+The following methods were considered for handling the missing value:
+
+- Linear interpolation. It approximates the missing value by means of surrounding values. This is the basic approach to manage missing data. In this instance, the KWH consumption from August and October 2008 allows one to interpolate the missing value. This approach supposes a slow change between consecutive months and would not much differ between these two months.
+
+- Imputation using the seasonal pattern. Power usage may be impacted by seasonal trends considering monthly data. We could also explore filling the missing figure by utilizing the average consumption for September across several years.
+
+Given just one missing value more complicated imputation techniques including seasonal imputation were under consideration, but we chose linear interpolation. Linear interpolation is usually enough for little, monthly gaps since it preserves the continuity of the time series and prevents overcomplicating the imputation technique.
+
+```{r analyze_power_df}
+#Convert the 'YYYY-MMM' column to date format
+power_df <- power_df %>%
+  mutate(`YYYY-MMM` = yearmonth(`YYYY-MMM`)) %>%
+  as_tsibble(index = `YYYY-MMM`) 
+
+#Summary statistics
+summary(power_df$KWH)
+str(power_df)
+
+#Check the data around NA value, 2008 Sep
+missing_index <- which(is.na(power_df$KWH))
+print("Data around the NA value:")
+power_df[seq(max(1, missing_index - 5), min(nrow(power_df), missing_index + 5)), ]
+
+#Linear interpolation to fix NA
+power_df$KWH <- na.approx(power_df$KWH)
+print("Data around the NA value after interpolation:")
+power_df[seq(max(1, missing_index - 5), min(nrow(power_df), missing_index + 5)), ]
+```
+
+#### 2.2 Outliers, STL decomposition
+
+The plot for the target variable shows seasonal changes. These cyclical fluctuations match expectations since electricity demand usually rises during particular seasons, perhaps in line with household heating and cooling needs in winter and summer. At a 12-month lag, the ACF plot shows a significant association that confirms annual seasonality in the power consumption data. Showing notable increases at comparable latency, the PACF plot supports these conclusions even more.
+
+A boxplot shows the power usage variance and possible outliers. There is one notable anomaly at the bottom bound. To find the outlier, Q1, Q3 and IQR were calculated together with  the lower and upper limits. Applying these limits, it was found that the July 2010 electricity consumption (770,523 KWH) was an aberration as it dropped below the lower limit. The best strategy is, if at all possible, to review the original data source or look into if outside events support the low July 2010 value. This would enable one to confirm if the value is a straightforward data entering error or a true record of very low power consumption. Since we don't have any information about the origin of the data, the location the data was collected from, correcting the amount for July 2010 to 7,705,230 KWH seems like the most sensible course of action in this regard as surrounding data and patterns clearly show that the value is an error. This correction was made to ensure that the time series is consistent and free from erroneous data points that could skew the results of any future forecasting models. 
+
+The corrected time series now shows a more consistent trend without the drastic drop observed previously in July 2010. The ACF and PACF plots remain largely unchanged, as the correction aligned the value with the expected seasonal pattern.
+
+```{r outlier_power}
+#Plot data
+power_df |>
+  gg_tsdisplay(KWH, plot_type="partial") +
+  labs(y="Power consumption, KWH",  title="Residential power usage, Jan 1998 - Dec 2013") 
+
+#Box-plot to check outliers
+ggplot(power_df, aes(x = "", y = KWH)) + 
+  geom_boxplot() + 
+  labs(title = "Boxplot of residential power usage, Jan 1998- Dec 2013", y = "Power consumption, KWH") 
+
+
+#Calculate Q1, Q3, IQR, the lower and upper bounds
+Q1 <- quantile(power_df$KWH, 0.25, na.rm = TRUE)
+Q3 <- quantile(power_df$KWH, 0.75, na.rm = TRUE)
+IQR_value <- IQR(power_df$KWH, na.rm = TRUE)
+lower_bound <- Q1 - 1.5 * IQR_value
+upper_bound <- Q3 + 1.5 * IQR_value
+
+#Rows with outliers, 2010 Jul 770523
+power_df %>%
+  filter(KWH < lower_bound | KWH > upper_bound)
+
+#Fix outlier row, 7705230 instead of 770523
+power_df <- power_df %>%
+  mutate(KWH = ifelse(`YYYY-MMM` == yearmonth("2010-07"), 7705230, KWH))
+
+#Plot data
+power_df |>
+  gg_tsdisplay(KWH, plot_type="partial") +
+  labs(y="Power consumption, KWH",  title="Residential power usage without outlier, Jan 1998 - Dec 2013")
+```
+
+The STL decomposition was used to separate the time series into its fundamental elements:
+
+Trends show the long-term data's development. Particularly following 2008, the trend component of the breakdown plot reveals a general rise in household power consumption. Factors such changes in domestic energy usage patterns, rising population, or infrastructure improvements could be driving this growing trend. Seasonality component shows the data's recurrent seasonal trend in seasonally. In this scenario, the seasonal component emphasizes strong and constant yearly cycles in power consumption, as expected from household use patterns (e.g., increased use during winter and summer months due of heating and cooling needs). Stable yearly seasonality is shown by the rather constant magnitude of the seasonal variations during the recorded time.  Remainder component Shows the residual or irregular component not explicable by seasonal or trend effects. The rest seems to exhibit some variation across the period, which would suggest erratic data noise.
+
+```{r stl_power}
+#STL decomposition
+power_df  %>%
+  model(STL(KWH ~ season(window = "periodic"))) %>%
+  components()  %>%
+  autoplot() + 
+  labs(title = "Decomposition of residential power usage, Jan 1998 - Dec 2013")
+```
+
+#### 2.3 Data transformation
+
+We should assess the need of a Box-Cox transformation to stabilize the variance and enhance the data distribution after fixing the missing value and outlier. Using the Guerrero approach, the lambda value was -0.2093916. As these indicate of heteroscedasticity, a lambda value closer to zero or negative shows that the data might benefit from processing to lower skewness and stabilize variance.
+
+The first column contrasts modified data with original time series data. While the modified data (in green) seems smoother and more balanced in terms of variance, the original data (in blue) show seasonal swings with a possible rising trend in later years. The data is more fit for modeling since the transformation preserves the general seasonal trend while lowering the degree of volatility.
+
+The second column displays distribution of power consumption both before and after the transformation. Particularly on the higher end, the original data shows little skewness and a broader range of values. After the Box-Cox transformation, the changed data has a considerably more symmetrical distribution. The modification effectively lowers skewness, hence improving the data fit for time series models predicated on normalization. 
+
+We also should verify if the series is stationary first before using any time series model, especially ARIMA models. For regular differencing, the result shows that any non-stationarity in the trend component of the time series requires one difference (ndiffs = 1). One seasonal difference (nsdiffs = 1) is needed to account for the seasonal structure in the data. To reach stationarity, the data should thus be differenced both seasonally and non-seasonally once. Stationarity of the time series was also statistically tested using the ADF test. With p-values much above the significance level (0.227 to 0.714), the ADF test failed to reject the null hypothesis of a unit root (non-stationarity). There was neither drift nor trend. Under this scenario, the test highly rejected the null hypothesis of non-stationarity with very low p-values (0.01), therefore indicating that the series becomes stationary when a drift term is included. The test rejected non-stationarity with p-values ≤ 0.01 across all lags, implying that the series is stationary when both drift and trend are taken into consideration, same as in the second criterion. We will apply these adjustments before suitable any models such as ARIMA or SARIMA since both one regular difference and one seasonal difference are required. 
+
+```{r boxcox_power}
+#Box-Cox lambda -0.209
+lambda <- power_df %>%
+  features(KWH, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#Box-Cox transformation
+power_df <- power_df %>%
+    mutate(boxcox_kwh = box_cox(KWH, lambda))
+
+#Original data
+p1 <- ggplot(power_df, aes(x = `YYYY-MMM`, y = KWH)) + 
+  geom_line(color = "lightblue") + 
+  labs(title = "Original residential \npower usage", y = "Power consumption, KWH", x = "Date")
+
+#Box-Cox transformed data
+p2 <- ggplot(power_df, aes(x = `YYYY-MMM`, y = boxcox_kwh)) + 
+  geom_line(color = "lightgreen") + 
+  labs(title = "Box-Cox residential \npower usage", y = "Transformed power consumption, KWH", x = "Date") 
+
+#Original distribution
+p3 <- ggplot(power_df, aes(x = KWH)) + 
+  geom_histogram(binwidth = 500000, fill = "lightblue", color = "black") + 
+  labs(title = "Original residential power usage \ndistribution", x = "Power consumption, KWH", y = "Frequency") 
+
+#Box-Cox transformed distribution
+p4 <- ggplot(power_df, aes(x = boxcox_kwh)) + 
+  geom_histogram(binwidth = 0.005, fill = "lightgreen", color = "black") + 
+  labs(title = "Box-Cox Transformed \ndistribution", x = "Transformed power consumption, KWH", y = "Frequency") 
+
+# Arrange the 4 plots in a 2x2 grid
+grid.arrange(p1, p3, p2, p4, ncol = 2, nrow = 2)
+
+#Check what differencing is needed
+power_df %>%
+  features(KWH, unitroot_ndiffs)
+
+power_df %>%
+  features(KWH, unitroot_nsdiffs)
+
+#Augmented Dickey-Fuller stationarity test
+adf.test(power_df$KWH)
+```
+
+### 3. Model Selection
+
+Changes in the series should be approximately uniform across time since time series models such as ARIMA imply constant variance (homoscedasticity) in the data. The lambda value around 0 indicates that the Box-Cox transformation was used to stabilize the variation in the power usage data. The transformation guarantees that ARIMA can more accurately depict the underlying patterns without being skewed by variance variations by lowering the heteroscedasticity.
+
+For time series data that is stationary or can be made stationary through differencing, ARIMA models are helpful. When there isn't a clear seasonal pattern, ARIMA's ability to incorporate autocorrelation and trends makes it appropriate for forecasting. Even though ARIMA is good at handling non-seasonal patterns, our sample blatantly displays seasonality, which ARIMA cannot handle on its own. SARIMA is an extension of ARIMA that can manage seasonal and trend components. SARIMA is a good option because we saw definite seasonality in electricity usage. With numerous tuning parameters (p, d, and q for non-seasonal components and P, D, and Q for seasonal components), SARIMA models can get complicated. Overfitting could make the model less generalizable by making it overly particular to past data.
+The ETS approach works well for time series that exhibit both a trend and a seasonal rhythm. It works effectively with energy data that has significant seasonal impacts since it clearly models the level, trend, and seasonality. Holt-Winters could not be as adaptable as SARIMA if there are erratic shocks (like economic events) or if the seasonal pattern changes dramatically over time.
+
+ETS Models: 
+
+- ETS(M,N,M) (Multiplicative error and seasonality): RMSE=627914, MAPE=7.28% (the model’s predictions deviate by 7.28% from actual values), AIC=6144. This model displayed moderate forecast accuracy but left noticeable autocorrelation in the residuals. This model displayed moderate forecast accuracy but left noticeable autocorrelation in the residuals. The model does not adequately represent all of the patterns in the data, especially the seasonal dependencies, as the ACF plot demonstrates pronounced autocorrelation at different lags. The residuals' distribution shows considerable variance but seems to be somewhat symmetrical, indicating that they might not be completely homoscedastic.
+The p-value of 0.0438 and the Ljung-Box test statistic of 21.5 are below the usual significance level of 0.05. This finding implies a high degree of autocorrelation in the residuals, indicating that certain dependencies are not taken into account by the model. 
+
+- ETS(A,A,A) with Box-Cox transformation: RMSE=616204 (became lower, improved predictive accuracy), MAPE=6.81% (decreased, this model is more accurate), AIC=-1146 (significantly lower, better suited for the data). The ACF plot  has the same results as the previous model. This model's residuals have a more balanced spread and are more closely clustered around zero. The distribution seems to be about normal, indicating that variance was successfully reduced using the Box-Cox transformation.The p-value is 0.00507 and the Ljung-Box test statistic is 28.3. Even though the residual distribution has been improved by the Box-Cox transformation, the low p-value still suggests strong autocorrelation at some lags. 
+
+- ETS(M,A,M) with Box-Cox: RMSE=622695 (a small decline in accuracy compared to the previous), MAPE=6.87% (similar predictive capability), MASE=0.739, AIC=-1142 (higher than ETS(A,A,A), a slightly less optimal fit). Seasonal dependencies are somewhat captured by the ACF plot, which displays slight autocorrelation at seasonal lags. Significant autocorrelation is shown by the test statistic of 31.2 and the p-value of 0.00186, which shows that the model does not account for all seasonal dependencies. The symmetric residuals show that some variation was decreased by the Box-Cox transformation. But there are still some lingering dependencies.
+
+SARIMA Models: 
+
+- SARIMA(0,0,4)(2,1,0)[12] with drift: RMSE=589615 (the lowest RMSE compared to the previous models), MAPE=6.53% (the model predictions deviate by about 6.53% on average), AIC=5331 (lower than ETS(M,N,M) model but higher than Box-Cox models). Minimal autocorrelation in the ACF plot indicates a well-fitting model with no discernible residual dependencies. An excellent fit is confirmed by the test statistic of 4.46 and p-value of 0.974, which show that the residuals are virtually uncorrelated. The assumption of homoscedasticity is supported by the residuals' reasonable symmetry. While residuals are larger in scale, they're more independent.
+
+- SARIMA(1,1,2)(1,1,1)[12] w/ drift: RMSE=598121 (slightly higher,marginally less accuracy), MAPE=6.66% (similar predictive accuracy), AIC=5306 (smaller, a better balance of fit and complexity). The same results as the previous model for ACF plot. A satisfactory model fit is indicated by the test statistic of 8.30 and p-value of 0.762, which validate residual independence. Homoscedasticity is supported by residuals that are regularly distributed around zero.
+
+- SARIMA(1,0,0)(2,1,0)[12] w/ drift with Box-Cox: RMSE=635047 (higher, less predictive accuracy), MAPE=7.37% (higher, less predictive accuracy), AIC=-1517 (lower, better parsimony despite the higher error metrics). ACF plot indicates that dependencies were introduced by the Box-Cox transformation by displaying some autocorrelation at different lags. Significant autocorrelation is present with a test statistic of 27.4 and a p-value of 0.00681, suggesting that dependencies are not taken into account by the model. Although the Box-Cox modification did not completely stabilize variance, the residuals demonstrate enhanced homoscedasticity.
+
+- SARIMA(1,1,2)(1,1,1)[12] w/ drift with Box-Cox: RMSE=671854 (highest, lower accuracy), MAPE=7.02% (higher, less accurate predictions), AIC=-1507 (almost the same as the previous model). Minimal autocorrelation in the ACF plot indicates a well-fitting model with no discernible residual dependencies. The model exhibits less autocorrelation but is not a perfect match, as indicated by its test statistic of 9.60 and p-value of 0.651.
+Although there are still some small dependencies, residuals are centered around zero, indicating homoscedasticity.
+
+```{r}
+fit_model <- power_df %>%
+  model(
+    #ETS model
+    et = ETS(KWH), #ETS(M,N,M) RMSE=627914 AIC=6144
+    et_bc = ETS(box_cox(KWH, lambda)), #ETS(A,A,A) RMSE=616204 AIC=-1146
+    et_mam_bc = ETS(box_cox(KWH, lambda) ~ error("M") + trend("A") + season("M")), #RMSE=622695, AIC=-1142
+    # Seasonal ARIMA (SARIMA) model
+    SARIMA = ARIMA(KWH), #ARIMA(0,0,4)(2,1,0)[12] w/ drift  RMSE=589615 AIC= 5331
+    SARIMA_112 = ARIMA(KWH ~ pdq(1,1,2) + PDQ(1,1,1, period = 12)), #RMSE=598121 AIC= 5306
+    SARIMA_bc = ARIMA(box_cox(KWH, lambda)), # ARIMA(1,0,0)(2,1,0)[12] w/ drift  RMSE=635047 AIC= -1517
+    SARIMA_112_bc = ARIMA(box_cox(KWH, lambda) ~ pdq(1,1,2) + PDQ(1,1,1, period = 12))) #RMSE=671854 AIC= -1507
+
+
+accuracy(fit_model)
+report(fit_model)
+
+# Loop through each model in fit_model and apply gg_tsresiduals
+models <- c("et", "et_bc", "et_mam_bc", "SARIMA","SARIMA_112", "SARIMA_bc","SARIMA_112_bc")
+
+# Apply gg_tsresiduals() to each model and display residuals
+for (model in models) {
+  a <- gg_tsresiduals(fit_model %>% select(all_of(model))) +
+  ggtitle(paste("Residuals for model:", model))
+  
+  print(a)
+}
+
+#Ljung-Box test 
+fit_model %>% 
+  augment() %>%  features(.innov, ljung_box, lag = 12)
+
+```
+
+### 4. Forecast for 2014
+
+The forecast comparison uses four models (SARIMA, SARIMA_112, SARIMA_bc, and SARIMA_112_bc) to show the expected residential electricity consumption from January 2014 to December 2014. The SARIMA and SARIMA_112 models offer a forecast that is rather steady and adheres to the overall seasonal pattern shown in the historical data. Due to data changes, these forecasts show some little variations even though they approximate the general pattern. SARIMA with the Box-Cox models demonstrate an enhanced capacity to manage the residual variance, leading to a more seamless forecast. In terms of important metrics like AIC, RMSE, and residual diagnostics, the SARIMA_112_bc model—which was selected as the final model—performed better than the others. This model shows a higher fit and dependability for future projections by precisely capturing the past trend while lowering residual autocorrelation. SARIMA(1,1,2)(1,1,1)[12] w/ drift with Box-Cox, the last model chosen, showed the best AIC metric. To ensure interpretability, its 2014 home power consumption projections are displayed below. The prediction shows both trend and seasonality in monthly usage, which is in good agreement with earlier data.
+
+```{r fc_power}
+#Forecast 
+fc_power <- fit_model %>% select(c(SARIMA, SARIMA_112, SARIMA_bc, SARIMA_112_bc)) %>%  forecast::forecast(h = 12)
+head(fc_power) 
+
+#Plot forecasts
+power_df_2010 <- power_df %>% filter(year(`YYYY-MMM`)>=2010)
+fc_power|>
+  autoplot(power_df_2010, level=NULL) +
+  labs(y="Power consumption, KWH", x="Date", title="Residential power usage with forecast, Jan 1998 - Dec 2014") +
+  facet_grid(.model~.) +
+  scale_color_manual(values = c("red", "purple", "blue", "green"))
+```
+
+
+### 5. Conclusion
+
+Using historical data from January 1998 to December 2013, the study's goal was to predict monthly home power usage for 2014. We examined the dataset's power consumption in kilowatt-hours to find any anomalies and comprehend seasonal and trend trends. To identify and predict these trends, we used a variety of time series models, such as SARIMA, SARIMA with Box-Cox transformation, and other ETS models. Metrics such residual diagnostics, AIC, MAPE, and RMSE were used to evaluate the models.
+
+Seasonality and a trend in power consumption were found in the preliminary exploratory analysis, which was probably driven by the heating and cooling requirements of households during the various seasons. In order to bring it into line with the anticipated seasonal trend, we fixed a major outlier in July 2010 and used linear interpolation to fill in a missing value in September 2008. The Box-Cox transformation was used to stabilize variation in the time series data, making the model more appropriate for forecasting.
+
+Our investigation showed that whereas ETS models were able to capture seasonality, some residual autocorrelation was still present. SARIMA models regularly offered superior fit, lower AIC values, and reduced autocorrelation in residuals, especially SARIMA(1,1,2)(1,1,1)[12] with Box-Cox transformation. This model was chosen for forecasting because of its accuracy and capacity to manage the dataset's intrinsic seasonality.
+
+We decided to use the  SARIMA(1,1,2)(1,1,1)[12] with Box-Cox transformation model for the final home power usage projection for 2014. This model is dependable for predicting future power consumption since its forecasts closely resemble past seasonal trends and have lower AIC than those of other models. The forecast, which displays both seasonal and trend components, is in good agreement with earlier data, proving that SARIMA with Box-Cox transformation is a useful tool for managing seasonality and variation in this dataset.
+
+Future enhancements might involve adding more factors that affect household energy consumption, such as weather patterns or socioeconomic statistics. Advanced feature engineering may increase model precision for forecasting, and further investigation of accuracy metrics like sMAPE may improve evaluation as well.
+
+
+
+## Part C – BONUS, optional
+
+Part C consists of two data sets.  These are simple 2 columns sets, however they have different time stamps. Your optional assignment is to time-base sequence the data and aggregate based on hour (example of what this looks like, follows).  Note for multiple recordings within an hour, take the mean.  Then to determine if the data is stationary and can it be forecast.  If so, provide a week forward forecast and present results via Rpubs and .rmd and the forecast in an Excel readable file.   
+
+### 1. Load data
+
+In order to guarantee data accessibility and analysis reproducibility, water flow measurements from two pipes were sourced from a GitHub repository and are included in the datasets Waterflow_Pipe1.xlsx and Waterflow_Pipe2.xlsx. Each file is downloaded to a temporary place using curl_download(). This keeps the working directory clear by guaranteeing that the files are only kept for the length of the analysis session. Read_xlsx() reads data straight from the temporary location into R for each file. The date format and numerical data types are explicitly defined by setting the col_types argument to c("date", "numeric"). For a brief review, DT::datatable() is used to display the first few rows of each dataset. We can confirm data loading and formatting because dates are displayed in the YYYY-MM-DD format.
+
+```{r load_pipe_df}
+#Load data from Github
+
+#Github raw URL
+url_1 <- "https://raw.githubusercontent.com/ex-pr/DATA624/main/project_1/Waterflow_Pipe1.xlsx"
+url_2 <- "https://raw.githubusercontent.com/ex-pr/DATA624/main/project_1/Waterflow_Pipe2.xlsx"
+
+#Create temporary file location and download file
+temp_loc_1 <- tempfile(fileext = ".xlsx")
+curl_download(url_1, temp_loc_1)
+
+#Read the file from the temporary location
+df_1 <- read_xlsx(temp_loc_1, col_types = c("date", "numeric"))
+
+#Create temporary file location and download file
+temp_loc_2 <- tempfile(fileext = ".xlsx")
+curl_download(url_2, temp_loc_2)
+
+#Read the file from the temporary location
+df_2 <- read_xlsx(temp_loc_2, col_types = c("date", "numeric"))
+
+pipe1_df <- df_1
+pipe2_df <- df_2
+
+#Check first rows of data
+DT::datatable(
+      pipe1_df[1:10,],
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+
+#Check first rows of data
+DT::datatable(
+      pipe2_df[1:10,],
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+```
+
+### 2. Exploratory Data Analysis
+
+#### 2.1 Summary statistics, Missing values
+
+The datasets contains the following columns: 
+
+`Date Time`: Each water flow reading's date and time of collection, expressed as YYYY-MM-DDTHH:MM:SSZ. Timestamps up to the second are included in this column; for aggregate reasons, they were rounded to the closest hour.
+
+`WaterFlow`: A numerical value representing the recorded water flow rate at each date. This variable is the focus of the forecasting analysis.
+
+Floor_date() was used to round the Date Time column to the closest hour because readings were taken at different times within each hour. This guarantees hourly alignment of each timestamp. The mean water flow for each hour was computed, and each dataset was aggregated according to the Date_Time column to produce a single representative result. In addition to providing a consistent time interval for time-series analysis, this step lowers noise from several readings taken within an hour. Complete() was used to fill in any missing hourly timestamps with NA values in order to produce a continuous time series. Accurate modeling depends on ensuring that all hours within the observed range are represented.
+The hourly data for the pipe 1 span the period from 2015-10-23 to 2015-11-01 by 240 hours (10 days), and for the pipe 2 from 2015-10-23 to 2015-12-03 by 1000 hours (41 days).
+
+The summary statistics for pipe 1: Mean=19.89; Maximum=31.73; Minimum=8.923. The water flow is very steady, with a small range between the lowest and maximum values.There are 4 missing values.
+
+The summary statistics for pipe 2: Mean=39.56; Maximum=78.303; Minimum=1.885. Pipe 2 exhibits a higher average, a significantly wider range, and more notable water flow variability. There may be more dynamic flow conditions in Pipe 2. There were no missing values.
+
+Linear interpolation (na.approx()), which calculates values based on nearby data points, was used to impute NAs for pipe 1. This method avoids making sudden shifts while maintaining seamless continuity.
+
+To make time-series analysis easier, the datasets were transformed to tsibble format. Each series is arranged chronologically by using Date_Time as the index, which makes it possible to apply time-series-specific algorithms and models efficiently.
+
+Both pipe 1 and pipe 2 have their hourly water flow plotted over time. Pipe 1 exhibits a rather steady flow with sporadic peaks, whereas Pipe 2 shows more variability and higher maximum values.
+
+For pipe 1, all autocorrelation values lie within the confidence ranges in the ACF plot. This suggests that the water flow measurements are mostly independent of earlier observations because there isn't much autocorrelation in the data. The lack of major dependencies at certain lags is further supported by the PACF plot, which also displays no notable spikes. The data may be more suitable for basic forecasting models, like a mean or naïve model, as opposed to ARIMA, which usually depends on lagged dependencies, given the lack of significant autocorrelation in both ACF and PACF, which indicates that pipe 1 has little temporal reliance.
+
+For pipe 2, there are significant spikes at lag and 24 in the ACF plot, it points to a pattern that might represent daily periodicity, in which water flow measurements exhibit some degree of correlation at particular periods of the day, it suggests that hourly patterns that may recur throughout the day and correspond to regular daily cycles are responsible for the water flow values. The possibility of daily seasonality is further supported by a spike in the PACF plot at lag 24. This spike supports a daily cycle pattern in the data.
+
+```{r hourly_df}
+#Aggregate data on an hourly basis, for multiple recordings within an hour, take the mean
+pipe1_hour_df <- pipe1_df %>%
+  mutate(Date_Time = floor_date(ymd_hms(`Date Time`), "hour")) %>%
+  group_by(Date_Time) %>%
+  summarise(WaterFlow_Pipe1 = mean(WaterFlow, na.rm = TRUE)) %>%
+  complete(Date_Time = seq(min(Date_Time), max(Date_Time), by = "hour"))
+
+pipe2_hour_df <- pipe2_df %>%
+  mutate(Date_Time = floor_date(`Date Time`, "hour")) %>%
+  group_by(Date_Time) %>%
+  summarise(WaterFlow_Pipe2 = mean(WaterFlow, na.rm = TRUE)) %>%
+  complete(Date_Time = seq(min(Date_Time), max(Date_Time), by = "hour"))
+
+```
+
+
+```{r analyze_pipe}
+#Check data type
+str(pipe1_hour_df)
+str(pipe2_hour_df)
+
+#Statistics 
+summary(pipe1_hour_df$WaterFlow_Pipe1)
+summary(pipe2_hour_df$WaterFlow_Pipe2)
+
+#Check NAs
+pipe1_hour_df[!complete.cases(pipe1_hour_df), ]
+pipe2_hour_df[!complete.cases(pipe2_hour_df), ]
+
+#Impute NA by linear interpol
+pipe1_hour_df$WaterFlow_Pipe1 <- zoo::na.approx(pipe1_hour_df$WaterFlow_Pipe1, na.rm = FALSE)
+
+#Any NA left
+sum(is.na(pipe1_hour_df$WaterFlow_Pipe1))
+
+#Transform to tsibble
+pipe1_hour_df <- pipe1_hour_df %>%
+  mutate(Date_Time = as.POSIXct(Date_Time)) %>%
+  arrange(Date_Time) %>%
+  as_tsibble(index = Date_Time, key = NULL)
+
+pipe2_hour_df <- pipe2_hour_df %>%
+  mutate(Date_Time = as.POSIXct(Date_Time)) %>%
+  arrange(Date_Time) %>%
+  as_tsibble(index = Date_Time, key = NULL)
+
+#Plot data
+pipe1_hour_df %>%
+  gg_tsdisplay(WaterFlow_Pipe1, plot_type = "partial") +
+  labs(y = "Water Flow", title = "Pipe 1 Hourly water flow, 23 Oct 2015 - 1 Nov 2015") 
+
+pipe2_hour_df %>%
+  gg_tsdisplay(WaterFlow_Pipe2, plot_type = "partial") +
+  labs(y = "Water Flow", title = "Pipe 2 Hourly water flow, 23 Oct 2015 - 3 Dec 2015")
+```
+
+#### 2.2 Outliers, STL decomposition, Tests
+
+To find outliers, we used boxplots.vWith one moderate outlier above 30, the boxplot for pipe 1 displays the majority of values between about 15 and 25. This is in line with the distribution histogram, which shows a constant flow rate with few dramatic variations and a somewhat compact spread of values around the mean. With values more widely distributed between 20 and 60, the boxplot for pipe 2 shows a larger range. 
+
+The decomposition of water flow data aids in identifying the trend, seasonal components, and remainder (noise or irregular swings). The STL decomposition was conducted during a 24 hour seasonal frame.
+
+Pipe 1: With only minimal modifications over time indicated by minor fluctuations, the trend component is comparatively constant. The rest exhibits random noise with weak patterns, suggesting few unexpected changes in flow, whereas the seasonal component displays a faint daily cycle.
+
+Pipe 2: Toward the conclusion of the period, the trend component exhibits a little increase, which may indicate a steady rise in flow rates over time. Daily and weekly trends are shown by the seasonal component, which supports the notion that operational or environmental factors impact the flow on particular days. But the noise in the random component is more noticeable, indicating that the water flow in pipe 2 is more volatile.
+
+Pipe 1: With just slight deviations, the skewness of 0.144 indicates a reasonably symmetric distribution around the mean. Because of this symmetry, stable operations are supported by the flow rates in pipe 1 being continuously centered around the average value.
+
+Pipe 2: it exhibits a wider range around the mean, but its flow rate distribution is almost symmetric with a skewness of 0.034. This implies that although the flow rates in pipe 2 may be more variable, they are more equally distributed.
+
+According to the ADF and KPSS tests, both pipes exhibit signs of stationarity, as shown by p-values less than 0.05. This suggests that the time series data for both pipes are both mean-stationary and do not require differencing, which makes them suitable for simple modeling techniques that do not require transformation. If more analysis or more complex modeling called for normalcy adjustments, the computed Box-Cox lambda values (0.904 for pipe 1 and 0.945 for pipe 2) indicate that just a small amount of modification would be necessary to stabilize variance. The transformation might not be required, though, because of the near-normal skewness.
+
+```{r outliers_stl}
+#Box-plot to check outliers
+pipe1_hour_df %>% ggplot(aes(x = "", y =WaterFlow_Pipe1)) +
+  geom_boxplot() + 
+  labs(title = "Boxplot of Pipe 1 Hourly water flow, 23 Oct 2015 - 1 Nov 2015", x = "Water Flow", y = "Frequency")
+
+pipe2_hour_df %>% ggplot(aes(x = "", y =WaterFlow_Pipe2)) +
+  geom_boxplot() + 
+  labs(title = "Boxplot of Pipe 2 Hourly water flow, 23 Oct 2015 - 1 Nov 2015", x = "Water Flow", y = "Frequency")
+
+#STL decomposition
+pipe1_hour_df %>%
+  model(STL(WaterFlow_Pipe1 ~ season(window = 24))) %>% 
+  components()  %>%
+  autoplot() + 
+  labs(title = "Decomposition of Pipe 1 Hourly water flow, 23 Oct 2015 - 1 Nov 2015")
+
+pipe2_hour_df %>%
+  model(STL(WaterFlow_Pipe2 ~ season(window = 24))) %>% 
+  components()  %>%
+  autoplot() + 
+  labs(title = "Decomposition of Pipe 2 Hourly water flow, 23 Oct 2015 - 1 Nov 2015")
+
+skewness(pipe1_hour_df$WaterFlow_Pipe1, na.rm = TRUE)
+skewness(pipe2_hour_df$WaterFlow_Pipe2, na.rm = TRUE)
+
+#Box-Cox lambda 0.904
+lambda_1 <- pipe1_hour_df %>%
+  features(WaterFlow_Pipe1, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#Box-Cox lambda 0.945
+lambda_2 <- pipe2_hour_df %>%
+  features(WaterFlow_Pipe2, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+pipe1_hour_df %>% ggplot(aes(x = WaterFlow_Pipe1)) +
+  geom_histogram(position = "dodge", bins = 30) +
+  labs(title = "Distribution of Pipe 1 Hourly water flow", x = "Water Flow", y = "Frequency")
+
+pipe2_hour_df %>% ggplot(aes(x = WaterFlow_Pipe2)) +
+  geom_histogram(position = "dodge", bins = 30) +
+  labs(title = "Distribution of Pipe 2 Hourly water flow", x = "Water Flow", y = "Frequency")
+
+#Check what differencing is needed
+pipe1_hour_df %>%
+  features(WaterFlow_Pipe1, unitroot_ndiffs)
+
+pipe1_hour_df %>%
+  features(WaterFlow_Pipe1, unitroot_nsdiffs)
+
+#Augmented Dickey-Fuller stationarity test
+adf.test(pipe1_hour_df$WaterFlow_Pipe1)
+kpss.test(pipe1_hour_df$WaterFlow_Pipe1)
+
+pipe2_hour_df %>%
+  features(WaterFlow_Pipe2, unitroot_ndiffs)
+
+pipe2_hour_df %>%
+  features(WaterFlow_Pipe2, unitroot_nsdiffs)
+
+adf.test(pipe2_hour_df$WaterFlow_Pipe2)
+kpss.test(pipe2_hour_df$WaterFlow_Pipe2)
+```
+
+### 3. Model Selection
+
+#### 3.1 Pipe 1
+
+A number of models, including Seasonal Naïve (SNAIVE), ETS, ARIMA, and SARIMA, were taken into consideration for the time series forecasting of hourly water flow in pipe 1. Given the little amount of data (only 10 days) and the stationary character of the series, the goal was to develop a model that strikes a balance between interpretability and accuracy.
+
+SNAIVE: the baseline is the SNAIVE model, which forecasts the following period using a straightforward seasonal lag of 24 hours. This method could miss subtler variations since it assumes that daily patterns of water flow are constant. RMSE=5.97. Significant autocorrelation in the residuals was also revealed by the Ljung-Box test, indicating that not all of the dependencies in the data are captured by the model. As a result, even though the SNAIVE model is straightforward, it might not be appropriate for precisely predicting intricate water flow patterns.
+
+ETS models:
+
+With an RMSE=4.21 and an AIC=2011.848 for stationary data, the ETS(M,N,N) offers a solid baseline. It assumes multiplicative errors, no trend, and no seasonal component. However, residuals showed a little amount of autocorrelation, suggesting that not all patterns are captured by the model. Compared to SNAIVE, the ETS model produced more consistent residuals, with minor variance swings and residuals centered around zero. Although the model covers the primary level, it overlooks minor dependencies, as indicated by the ACF plot's slight residual autocorrelation at low lags. This can suggest that trend or seasonality modifications are required.  The Ljung-Box test does not reveal substantial autocorrelation in the residuals, with a p-value of around 0.577, suggesting that the model well reflects the data's basic structure.
+
+ETS(A,N,A) incorporates additive seasonality, which resulted in a marginally better AIC (2036) and a lower RMSE=4.01. The model showed balanced spread and well-centered residuals. The ACF plot displayed very little autocorrelation, with most lags having values near zero. This implies that the model reduces residual dependence by accurately capturing seasonal patterns. The model appears to handle dependencies, including the seasonality in the data, well, as indicated by the p-value of 0.202, which shows no significant residual autocorrelation. A p-value of 0.4112 indicates consistent residual variance and no heteroscedasticity. The residual plot, which displays little spread around zero, is in line with this.
+
+ARIMA models:
+
+ARIMA(0,0,0) with a constant: It performed similarly to the standard ETS model with an RMSE=4.21, while the residuals displayed a little more autocorrelation. The premise of homoscedasticity was supported by the residuals' symmetry and low variance fluctuations. The AIC results were better compared to the previous models (1376). The model appears to fit the stationary pattern rather well, as indicated by the p-value of 0.577, which shows no significant autocorrelation.
+
+SARIMA(0,0,0)(0,0,1)[24] was used to account for possible daily seasonality. The model complexity rose without a discernible decrease in residual autocorrelation, despite the fact that it produced a comparable RMSE=4.21, AIC=1377. Given the data's steady character and no seasonal influence, the SARIMA model seems over-specified. A seasonal component was added to the SARIMA model, which somewhat enhanced residual patterns. Although there are still sporadic high residuals, residuals are more closely concentrated around zero, suggesting that the model is not adequately capturing short-term variations. Although some seasonality is recorded, the model does not account for residual dependencies, as indicated by the ACF plot's slight autocorrelation, particularly at seasonal lags. Although it might not fully account for all seasonal lags, the Ljung-Box test indicates no significant autocorrelation with a p-value of 0.593, confirming that the model captures important dependencies.
+
+SARIMA(2,0,2): It showed a small improvement in fit, lowering the AIC to 1377 and the RMSE to 4.20. The model fulfills homoscedasticity since its residuals were symmetrically distributed and showed no discernible variance fluctuations. A excellent balance between minimizing error and capturing complicated autocorrelation. This model yielded the best balanced residuals, with fewer extreme values and residuals that were tightly centered around zero. This suggests that the model outperforms earlier models in capturing autocorrelation patterns. The ACF plot showed little autocorrelation, demonstrating that the model effectively accounts for dependencies like as seasonality and short-term variations. Ljung-Box test yielded a p-value of 0.731, showing that the model adequately accounts for dependencies in the data and pointing to no substantial autocorrelation.
+Breusch-Pagan Test: The model's reliability is increased for longer forecasts by homoscedasticity, which is indicated by a p-value of 0.9866 and consistent variance across residuals.
+
+```{r pipe1_model}
+#Build models
+fit_pipe1 <- pipe1_hour_df %>%
+  model(
+    #Baseline SNAIVE
+    snaive = SNAIVE(WaterFlow_Pipe1 ~ lag("24 hours")), #RMSE=5.97
+    #ETS model
+    et = ETS(WaterFlow_Pipe1), #ETS(M,N,N)  AIC=2011.848 RMSE=4.21
+    et_ana = ETS(WaterFlow_Pipe1 ~ error("A") + trend("N") + season("A")), #AIC=2036 RMSE=4.01
+    #ARIMA model
+    ARIMA = ARIMA(WaterFlow_Pipe1), #ARIMA(0,0,0) w/ mean AIC=1376  RMSE=4.21
+    sarima = ARIMA(WaterFlow_Pipe1 ~ pdq(0, 0, 0) + PDQ(0, 0, 1, period = 24)), #AIC=1377 RMSE=4.21
+    sarima_202 = ARIMA(WaterFlow_Pipe1 ~ pdq(2, 0, 2))) #AIC=1377 RMSE=4.21
+
+
+accuracy(fit_pipe1)
+report(fit_pipe1)
+
+fit_pipe1 %>%
+  select("et") %>%
+  report()
+
+fit_pipe1 %>%
+  select("ARIMA") %>%
+  report()
+
+
+# Loop through each model in fit_model and apply gg_tsresiduals
+models <- c("snaive", "et", "et_ana", "ARIMA", "sarima", "sarima_202")
+
+# Apply gg_tsresiduals() to each model and display residuals
+for (model in models) {
+  a <- gg_tsresiduals(fit_pipe1 %>% select(all_of(model))) +
+  ggtitle(paste("Residuals for model Pipe 1:", model))
+  
+  print(a)
+}
+
+#Ljung-Box test 
+fit_pipe1 %>% 
+  augment() %>%  features(.innov, ljung_box, lag = 24)
+
+#Breusch-Pagan test 
+fit_arima1 <- fit_pipe1 %>%
+  select("et_ana")
+residuals_arima1 <- residuals(fit_arima1) %>% pull(.resid)
+bptest(residuals_arima1 ~ seq_along(residuals_arima1), data = data.frame(residuals_arima1))
+
+#Breusch-Pagan test 
+fit_arima1 <- fit_pipe1 %>%
+  select("sarima_202")
+residuals_arima1 <- residuals(fit_arima1) %>% pull(.resid)
+bptest(residuals_arima1 ~ seq_along(residuals_arima1), data = data.frame(residuals_arima1))
+```
+
+#### 3.2 Pipe 2
+
+For the water flow data in pipe 2, three models were taken into consideration: 
+
+SNAIVE Model: To take into consideration possible daily seasonality, the SNAIVE model employs a 24-hour lag. It may not fully capture the underlying structure, as evidenced by its highest RMSE of 21.6 among the models. Significant autocorrelation in the residuals was shown by the Ljung-Box test, and non-random residual patterns were confirmed by ACF plots, indicating that the model underfits the data.
+
+ETS Model: With an RMSE of 16.0 and an AIC of 12464.20, the ETS(M,N,N) model offered a decent fit. A strong match to the level of the data was indicated by the model residuals' lack of significant autocorrelation (p-value of 0.116 in the Ljung-Box test). The usefulness of ETS for simulating stable variations was supported by the lack of evidence of heteroscedasticity in the Breusch-Pagan test.
+
+ARIMA Model: Automatic selection was used to choose an ARIMA(0,0,0)(0,0,1)[24] model with a mean term. The model with the lowest AIC (8387.08) and RMSE (16.0) was this one. The residuals' ACF and PACF plots revealed no discernible autocorrelations, and the Ljung-Box p-value of 0.373 further supported the residuals' independence, indicating that the model well reflects the seasonality and trends of the data.
+
+The ACF and STL demonstrated that the data showed both daily and weekly seasonal patterns. However, because ARIMA only supports one seasonal component at a time, its limits as a single-model approach became evident. Because of this restriction, it was challenging to appropriately represent both daily and weekly seasonality in a single SARIMA model. The ARIMA model was hampered by its incapacity to manage several seasonalities (daily and weekly) at the same time, even if it did a good job of modeling a single seasonal component. Warnings about distinctive roots and non-finite beginning values were indicators of model instability in attempts to fit SARIMA with both daily (24-hour) and weekly (168-hour) periods. The weekly trend and smooth seasonality were well-captured by ETS, but the more frequent and repetitive daily cycles were difficult for it to handle. Although this model provided a more reliable baseline, its daily-level forecasts was imprecise. The SNAIVE model is a good option for modeling short-term forecasts with consistent daily seasonality since it successfully captures the daily repeated pattern. However, SNAIVE's accuracy for longer forecast horizons is limited due to its lack of trend and long-term adaptation.
+
+Fourier-term Dynamic Harmonic Regression (DHR): Using Fourier terms with periods of 24 and 168 hours, I investigated dynamic harmonic regression after identifying the numerous seasonalities in the data (daily and weekly). Richer seasonality modeling was made possible by this approach. I adjusted these parameters based on empirical tests and AIC selection, even though it required subjective decisions on the amount of Fourier terms. In the end, I used three Fourier terms for the weekly component and five for the daily component. The prediction graphic and residual diagnostics showed that the DHR model with ARIMA errors approximated the seasonality better. However, predicted values were frequently less than anticipated, maybe as a result of the Fourier terms' intrinsic averaging effect and the ARIMA model's error structure's inability to adequately capture the data's severe fluctuations. AIC=8409, RMSE=15.9. The innovation residuals' plot shows that they are centered around zero, indicating that the model's predictions are largely objective. There is still significant variability, though, with discernible variations around the mean. The ACF plot's lack of notable autocorrelation spikes outside of the confidence intervals is a clue that there aren't many lingering dependencies between lags. This result implies that the model has effectively reduced autocorrelation in residuals by capturing the main seasonal and trend components in the data. Additionally, the residual histogram resembles a normal distribution, indicating that the model is appropriate for representing the dynamics of water flow in Pipe 2. The model's adequacy is supported by the Ljung-Box test result, which shows no significant autocorrelation in the residuals and a p-value of 0.233, indicating that the model represents dependencies well. Even while it works well overall, more fine-tuning could lead to modest gains in error metrics, particularly when it comes to simulating the data's extremes or anomalies.
+
+```{r pipe2_model}
+#Build models
+fit_pipe2 <- pipe2_hour_df %>%
+  model(
+    #Baseline SNAIVE
+    snaive = SNAIVE(WaterFlow_Pipe2 ~ lag("24 hours")), #RMSE=21.6
+    #ETS model
+    et = ETS(WaterFlow_Pipe2), #ETS(M,N,N)  AIC=12464.20 RMSE=16
+    #ARIMA model
+    ARIMA = ARIMA(WaterFlow_Pipe2))#ARIMA(0,0,0)(0,0,1)[24] w/ mean  AIC=8387.08  RMSE=16
+
+
+accuracy(fit_pipe2)
+report(fit_pipe2)
+
+fit_pipe2 %>%
+  select("et") %>%
+  report()
+
+fit_pipe2 %>%
+  select("ARIMA") %>%
+  report()
+
+# Loop through each model in fit_model and apply gg_tsresiduals
+models <- c("snaive", "et", "ARIMA")
+
+# Apply gg_tsresiduals() to each model and display residuals
+for (model in models) {
+  a <- gg_tsresiduals(fit_pipe2 %>% select(all_of(model))) +
+  ggtitle(paste("Residuals for model Pipe 2:", model))
+  
+  print(a)
+}
+
+#Ljung-Box test 
+fit_pipe2 %>% 
+  augment() %>%  features(.innov, ljung_box, lag = 24)
+
+
+#Breusch-Pagan test 
+fit_arima2 <- fit_pipe2 %>%
+  select("ARIMA")
+residuals_arima2 <- residuals(fit_arima2) %>% pull(.resid)
+bptest(residuals_arima2 ~ seq_along(residuals_arima2), data = data.frame(residuals_arima2))
+```
+
+
+```{r}
+# Add day of the week and working day indicators
+pipe2_hour_df <- pipe2_hour_df %>%
+  mutate(
+    DOW = wday(Date_Time, label = TRUE),
+    Working_Day = !(DOW %in% c("Sat", "Sun"))
+  )
+
+# Build the dynamic harmonic regression model with ARIMA errors
+fit_pipe_dhr <- pipe2_hour_df %>%
+  model(
+    dhr = ARIMA(WaterFlow_Pipe2 ~ PDQ(0, 0, 0) + pdq(d = 0) +
+                  Working_Day +
+                  fourier(period = 24, K = 5) +
+                  fourier(period = 168, K = 3))
+  )
+
+report(fit_pipe_dhr)
+
+gg_tsresiduals(fit_pipe_dhr) +
+     ggtitle("Residuals for model DHR Pipe 2:")
+
+fit_pipe_dhr  %>% 
+     augment() %>%  features(.innov, ljung_box, lag = 24)
+
+# Create new data for one-week-ahead forecasting
+pipe2_forecast_data <- new_data(pipe2_hour_df, n = 168) %>%
+  mutate(
+    DOW = wday(Date_Time, label = TRUE),
+    Working_Day = !(DOW %in% c("Sat", "Sun"))
+  )
+```
+
+
+### 4. Forecast for a week
+
+#### 4.1 Forecast  Pipe 1
+
+It is difficult to identify and predict longer-term trends with Pipe 1's 10-day data set. The little historical window may make forecasting for an extra 7 days challenging.The ACF and PACF plots of the data revealed little autocorrelation, suggesting less reliance on historical values. This implies that since there is no discernible seasonality or trend patterns in the series, simpler models might be enough. Because there isn't much past dependence to rely on, forecasting could be difficult.
+
+SNAIVE baseline model produces a flat, repetitive forecast by repeating the pattern from the previous day. It is straightforward but unadaptable, which reduces its dependability after a week. ETS generates a static forecast that captures no fluctuations and is around the recent average. Its predictive value is limited during a period of seven days due to the absence of seasonality adjustments. ETS (A,N,A) model adapts dynamically to current trends, producing a forecast that is rhythmic and reflects daily variations. It is the best option for short-term forecasting because it is the most responsive of all. SARIMA(2,0,2) exibits some modifications because of its seasonal component, while ARIMA and SARIMA both offer flat projections near the mean level. Although reliable, they may perform poorly over a full week and struggle to catch everyday fluctuation.
+
+ETS(A,N,A)) is suggested because to its capacity to adjust to daily trends and provide a forecast that is responsive and well-balanced. SARIMA(2,0,2) is an alternative, but given the little data, it could not have the flexibility needed for week-long forecasting.
+
+```{r fc_pipe1}
+#Forecast 
+fc_pipe1 <- fit_pipe1 %>% forecast::forecast(h = 168)
+head(fc_pipe1)
+
+#Plot forecasts
+fc_pipe1 |>
+  autoplot(pipe1_hour_df, level=NULL) +
+  labs(y="Water Flow", title="Pipe 1 Hourly water flow with a week forecast") +
+  facet_grid(.model~.) +
+  scale_color_manual(values = c("red", "purple", "blue", "pink", "lightblue", "green"))
+```
+
+#### 4.2 Forecast  Pipe 2
+
+The most promising method from these experiments was the DHR model with Fourier terms and ARIMA errors, which showed an attempt to include more seasonality patterns. But given the complexity of the data, it is possible that accuracy might be improved by additional modifications such testing higher Fourier orders or adding exogenous factors. The investigation strikes a mix between using techniques from textbooks and customizing them to fit the particulars of this dataset.
+
+```{r fc_pipe3}
+#Forecast 
+fc_pipe2 <- fit_pipe2 %>% forecast::forecast(h = 168)
+
+#Plot forecasts
+fc_pipe2 |>
+  autoplot(pipe2_hour_df, level=NULL) +
+  labs(y="Water Flow", title="Pipe 2 Hourly water flow with a week forecast") +
+  facet_grid(.model~.) +
+  scale_color_manual(values = c("red", "purple", "blue"))
+
+
+# Generate forecasts
+fc_pipe_dhr <- fit_pipe_dhr %>%
+  forecast::forecast(new_data = pipe2_forecast_data)
+
+# Plot forecasts
+fc_pipe_dhr |>
+  autoplot(pipe2_hour_df |> tail(24 * 7), level=NULL) +  # Last 4 weeks of data
+  labs(
+    title = "Pipe 2 Hourly Water Flow with Dynamic Harmonic Regression Forecast",
+    y = "Water Flow",
+    x = "Date_Time"
+  )
+```
+
+
+### 5. Conclusion
+
+The purpose of this investigation was to investigate and model the water flow data from two pipes, each of which had distinct time-series features, patterns, and variances. Each dataset's stationarity, seasonal trends, and noise were examined using a range of exploratory, modeling, and validation procedures. Models were evaluated and chosen for both pipelines based on their capacity to decrease error measures like RMSE, fit residuals well, and identify underlying trends.
+
+Simpler models were used for Pipe 1 due to its consistent flow behavior and comparatively little dataset. The ETS(A,N,A) model was selected as the best model for short-term forecasting in this instance out of all the examined models because it can successfully capture seasonal swings and small trends.
+
+Dynamic Harmonic Regression (DHR) with Fourier terms was used for Pipe 2 because the data showed more intricate seasonal patterns, such as daily and weekly cycles. Although a deeper depiction of seasonality was made possible by this approach, it was still difficult to predict extreme deviations with accuracy. Within the limitations of the data, the model with ARIMA errors produced the best accurate forecast; nevertheless, additional enhancements could be possible by adding exogenous variables or refining the seasonal components.
+
+Although the ETS and DHR models with ARIMA errors showed resilience in managing the features of Pipes 1 and 2, respectively, their inability to adequately capture intricate seasonal patterns and extremes points to the need for further improvements. More complex predictions might be obtained by investigating sophisticated feature engineering or hybrid models and adding more external variables. This exercise demonstrated how crucial it is to modify time-series models to fit the unique dynamics of every dataset, striking a balance between simplicity and complexity to ensure accurate predictions.
+
+
+### Save results
+
+```{r write_csv}
+#Part a
+#Combine forecasts
+fc_atm <- bind_rows(
+  mutate(fc_atm1, ATM = "ATM1"),
+  mutate(fc_atm2, ATM = "ATM2"),
+  mutate(fc_atm3, ATM = "ATM3"),
+  mutate(fc_atm4, ATM = "ATM4")
+)
+
+write.csv(fc_atm, "everyday_may2010.csv", row.names = FALSE)
+
+may_totals <- data.frame(
+  ATM = c("may_atm1", "may_atm2", "may_atm3", "may_atm4"),
+  total_cash = c(may_atm1, may_atm2, may_atm3, may_atm4)
+)
+write.csv(may_totals, "may_atm_totals.csv", row.names = FALSE)
+
+
+#Part B
+fc_power_csv <- fc_power %>% as_tibble() %>% filter(.model == "SARIMA_112_bc") %>% select(c(`YYYY-MMM`, .mean)) %>%  rename(KWH = .mean)
+write.csv(fc_power_csv , "fc_power_csv.csv", row.names = FALSE)
+
+#Part C
+fc_pipe1_csv <- fc_pipe1 %>% as_tibble() %>% filter(.model == "et_ana") %>% select(c(Date_Time, .mean)) %>%  rename(WaterFlow_Pipe1 = .mean) %>%  rename(`Date Time` = Date_Time)
+fc_pipe2_csv <- fc_pipe_dhr %>% as_tibble() %>% select(c(Date_Time, .mean)) %>%  rename(WaterFlow_Pipe2 = .mean) %>%  rename(`Date Time` = Date_Time)
+write.csv(fc_pipe1_csv, "pipe_1_fc.csv", row.names = FALSE)
+write.csv(fc_pipe2_csv, "pipe_2_fc.csv", row.names = FALSE)
+```
