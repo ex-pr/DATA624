@@ -1,0 +1,439 @@
+---
+title: "Homework 7. Linear Regression"
+author: "Daria Dubovskaia"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: hide
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+editor_options:
+  chunk_output_type: console
+  markdown:
+    wrap: sentence
+---
+
+
+```{r setup, message=FALSE, warning=FALSE}
+#chunks
+knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+#libraries
+library(tidyverse)
+library(fpp3)
+library(latex2exp)
+library(seasonal)
+library(GGally)
+library(gridExtra)
+library(reshape2)
+library(Hmisc)
+library(corrplot)
+library(e1071)
+library(caret)
+library(VIM)
+library(forecast)
+library(urca)
+library(earth)
+library(glmnet)
+library(aTSA)
+library(AppliedPredictiveModeling)
+#random seed
+set.seed(547)
+```
+
+
+## 6.2. 
+
+**Developing a model to predict permeability (see Sect. 1.4) could save significant resources for a pharmaceutical company, while at the same time more rapidly identifying molecules that have a sufficient permeability to become a drug:**
+
+
+### a. 
+
+**Start R and use these commands to load the data. The matrix fingerprints contains the 1,107 binary molecular predictors for the 165 compounds, while permeability contains permeability response.**
+
+```{r load_permeability}
+#Load data
+#library(AppliedPredictiveModeling)
+data(permeability)
+
+#Copy data
+perme_df <- permeability
+```
+
+### b. 
+
+**The fingerprint predictors indicate the presence or absence of substructures of a molecule and are often sparse meaning that relatively few of the molecules contain each substructure. Filter out the predictors that have low frequencies using the nearZeroVar function from the caret package. How many predictors are left for modeling?**
+
+The fingerprints were sparse since each predictor offered a binary indication of whether a certain substructure was present or absent. Predictors with low frequencies (i.e., near-zero variance) were filtered away using the caret package's nearZeroVar function, leaving only predictors with sufficient variability. Following filtering, 388 predictors remained from the original 1,107.
+
+```{r nearZeroVar}
+#Filter out predictors with low frequencies nearZeroVar()
+nzv <- nearZeroVar(fingerprints, saveMetrics = TRUE)
+fingerprints_nzv <- fingerprints[, !nzv$nzv]
+
+#388 predictors left after nearZeroVar
+ncol(fingerprints_nzv)
+```
+
+### c. 
+
+**Split the data into a training and a test set, pre-process the data, and tune a PLS model. How many latent variables are optimal and what is the corresponding resampled estimate of R^2?**
+
+To prepare the data for modeling, we divided it into a training set (80%) and a test set (20%): training set has 133 observations, test set has 32 observations.
+
+We cross-validated a Partial Least Squares (PLS) model, tweaking it over a range of 1 to 10 latent variables to get the ideal number. Next, we used train() with preProcess = c("center", "scale") to train the model. During cross-validation and testing of training data, caret automatically applies centering and scaling. In this way we made sure that pre-processing was executed consistently to both training and test sets using the same settings, which were maintained by caret. We also utilized repeated cross-validation to obtain a more stable estimate by using "repeatedcv" and repeats as 3. This produced a little more robust estimate, but at the expense of additional calculation.
+
+The cross-validated findings showed that a model with 8 latent variables produced the best results, with a resampled R^2 of around 0.46, RMSE=11.82.
+
+```{r split_fingerprints}
+set.seed(547)
+
+#Split fingerprints data
+train_idx <- createDataPartition(perme_df, p = 0.8, list = FALSE)
+train_df <- fingerprints_nzv[train_idx, ]
+test_df <- fingerprints_nzv[-train_idx, ]
+#Split response data
+train_perme <- perme_df[train_idx]
+test_perme <- perme_df[-train_idx]
+
+str(train_df)
+str(test_df)
+str(train_perme)
+str(test_perme)
+```
+
+```{r tune_pls_fingerprints}
+set.seed(547)
+#10-fold cross-validation for the optimal number of latent variables, up to 10 variables
+plsGrid <- expand.grid(ncomp = 1:10) 
+
+#Repeat 10-fold cross-validation 3 times and build model
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 3) 
+pls_model <- train(
+  x = train_df,
+  y = train_perme,
+  method = "pls",
+  tuneGrid = plsGrid,
+  trControl = control,
+  preProcess = c("center", "scale")
+)
+
+#Optimal # of latent variables = 8, R2 = 0.4553289 RMSE=11.82041
+pls_model$bestTune
+pls_model$results
+plot(pls_model)
+```
+
+### d.
+
+**Predict the response for the test set. What is the test set estimate of R^2?**
+
+We used the trained PLS model to estimate the permeability values for the test set and tested the model's performance on previously unseen data. The model explains roughly 63.2% of the variance in permeability for the test data, as indicated by the test set's R^2 value of 0.632. This indicates the model's ability to accurately forecast fresh data. Furthermore, RMSE was found to be around 10.74. The model effectively captures the link between predictors and permeability in the test set, as evidenced by a high R^2 and low RMSE.
+
+```{r predict_test_fingerprints}
+#Predict test set
+pls_predict <- predict(pls_model, newdata = test_df)
+
+#Compute R2 =  0.6318318 RMSE = 10.74333
+pls_r2 <- R2(pls_predict, test_perme)
+pls_rmse <- RMSE(pls_predict, test_perme)
+pls_r2
+pls_rmse
+```
+
+
+### e. 
+
+**Try building other models discussed in this chapter. Do any have better predictive performance?**
+
+The following models were used:
+
+- Ridge regression reduces overfitting by applying a L2-norm penalty on linear regression coefficients. It is effective when predictors exhibit multicollinearity. We developed the model with train(), ridge as the algorithm, and a lambda tuning grid. The best lambda value was found to be 0.23. Ridge regression had a R^2 of 0.62 with an RMSE of 11.24 on the test set. This performance is little lower than PLS, but still acceptable.
+
+- Lasso regression employs a L1-norm penalty to reduce some coefficients to zero, resulting in successful feature selection. This is useful in sparse models where certain attributes may be irrelevant. Using train() and glmnet as methods, we tweaked for alpha = 1 (pure Lasso) and lambda. The best lambda value was 0.45. The model outperformed PLS and Ridge, with a R^2 of 0.65 and RMSE of 10.72 for the test set, indicating good handling of sparse data.
+
+- To increase prediction accuracy and strike a balance between Lasso and Ridge regularization, we built an Elastic Net model with glmnet. The ideal parameter values were chosen using repeated 10-fold cross-validation to get the lowest RMSE. The ideal tuning parameters for the Elastic Net model were alpha=0.9 (Lasso-like behavior), lambda=0.46. The Elastic Net model fit the test set well, with an RMSE of 10.48236 and a R^2 of 0.6679718. The plot shows that when alpha approaches 1, RMSE rapidly declines, highlighting the Lasso penalty's sparsity-inducing feature.
+
+The Elastic Net model offers a versatile solution that incorporates both Ridge and Lasso penalties. In this scenario, the model was more inclined toward Lasso (with a high alpha value of 0.9), implying that a sparse solution with fewer coefficients was more successful for the dataset. This strategy produced a lower RMSE than the Ridge regression model and equivalent performance to the Lasso model. As a result, Elastic Net is a useful tool for balancing feature selection with model complexity. If more improvement is wanted, exploring a finer grid around the identified optimal values or adding more hyperparameters may help to optimize the model. 
+
+```{r ridge_fingerprints}
+set.seed(547)
+#Ridge Regression
+ridgeGrid <- expand.grid(lambda = seq(0.01, 1, length = 10))
+ridge_model <- train(
+  x = train_df,
+  y = train_perme,
+  method = "ridge",
+  tuneGrid = ridgeGrid,
+  trControl = control,
+  preProcess = c("center", "scale")
+  )
+
+#Optimal lambda=0.23, R2 = 0.4534137  RMSE=12.58217
+ridge_model$bestTune
+ridge_model$results
+plot(ridge_model)
+
+#R2 = 0.6190875 RMSE= 11.23778
+ridge_predict <- predict(ridge_model, newdata = test_df)
+ridge_r2 <- R2(ridge_predict, test_perme)
+ridge_rmse <- RMSE(ridge_predict, test_perme)
+```
+
+
+```{r lasso_fingerprints}
+set.seed(547)
+#Lasso regeression
+lassoGrid <- expand.grid(alpha = 1, lambda = seq(0.0001, 0.5, by = 0.05))
+lasso_model <- train(
+  x = train_df,
+  y = train_perme,
+  method = "glmnet",
+  tuneGrid = lassoGrid,
+  trControl = control,
+  preProcess = c("center", "scale")
+  )
+
+#Optimal lambda= 0.4501, R2 = 0.4648473 RMSE=11.50082
+lasso_model$bestTune
+lasso_model$results
+plot(lasso_model)
+
+#Compute R2 = 0.6479493 RMSE= 10.72072
+lasso_predict <- predict(lasso_model, newdata = test_df)
+lasso_r2 <- R2(lasso_predict, test_perme)
+lasso_rmse <- RMSE(lasso_predict, test_perme)
+```
+
+
+```{r elasticnet_fingerprints}
+set.seed(547)
+#Elastic net
+enetGrid <-  expand.grid(alpha = seq(0.1, 1, by = 0.1), lambda = seq(0.01, 0.5, by = 0.05))
+
+enet_model <- train(
+  x = train_df,
+  y = train_perme,
+  method = "glmnet",
+  tuneGrid = enetGrid,
+  trControl = control,
+  preProcess = c("center", "scale")
+  )
+
+#Optimal alpa=0.9, lambda= 0.46, R2 = 0.466719 RMSE= 11.49296
+enet_model$bestTune
+enet_model$results[enet_model$results$alpha == enet_model$bestTune$alpha & enet_model$results$lambda == enet_model$bestTune$lambda, ]
+plot(enet_model)
+
+#Compute R2 = 0.6679718 RMSE= 10.48236
+enet_predict <- predict(enet_model, newdata = test_df)
+enet_r2 <- R2(enet_predict, test_perme)
+enet_rmse <- RMSE(enet_predict, test_perme)
+```
+
+```{r}
+results <- data.frame(Model = c("PLS", "Ridge", "Lasso", "Elastic Net"), Test_R2 = c(pls_r2, ridge_r2, lasso_r2, enet_r2), Test_RMSE = c(pls_rmse, ridge_rmse, lasso_rmse, enet_rmse))
+results
+```
+
+
+### f.
+
+**Would you recommend any of your models to replace the permeability laboratory experiment?**
+
+Based on the performance metrics derived from the models, we would be wary about endorsing one of them as a viable alternative for the permeability lab experiment. However, a few considerations must be taken into consideration before reaching a final recommendation:
+
+The Elastic Net model has the highest accuracy and predictive power on the test set, with an RMSE of 10.48 and R^2 of 0.668. There is a reasonably strong predictive capability, however there is still potential for error. Laboratory trials often provide a higher level of precision and reliability, so the model's error rate must be carefully considered in the context of practical application. The Elastic Net model strikes a balance between Ridge and Lasso regularization, allowing for some feature selection and so making the model interpretable. However, because it relies on statistical correlations rather than actual measures, it may miss some underlying subtleties. If consistency in prediction accuracy is critical, depending exclusively on the model may pose dangers, particularly if new or unknown conditions emerge. If the primary goal is to lower costs while increasing efficiency, the model could be used as a supplement to the laboratory experiment rather than a complete replacement. For example, it might be used to pre-screen samples and prioritize those that require laboratory testing, minimizing the number of physical trials required.
+
+Before completely replacing laboratory experiments, the model should be verified on a wider range of data, ideally under a variety of conditions and environments. Additional validation stages, such as testing on previously unseen data or in-field samples, would increase confidence in the model's generalizability.
+
+In conclusion, while the Elastic Net model shows promise and could potentially supplement laboratory experiments, it may not yet be precise enough to completely replace physical testing. It is advised that the model be used as a workflow support tool, reducing costs and increasing efficiency by determining which samples to prioritize for laboratory testing.
+
+
+## 6.3. 
+
+**A chemical manufacturing process for a pharmaceutical product was discussed in Sect. 1.4. In this problem, the objective is to understand the relationship between biological measurements of the raw materials (predictors), measurements of the manufacturing process (predictors), and the response of product yield. Biological predictors cannot be changed but can be used to assess the quality of the raw material before processing. On the other hand, manufacturing process predictors can be changed in the manufacturing process. Improving product yield by 1 % will boost revenue by approximately one hundred thousand dollars per batch:**
+
+### a. 
+
+**Start R and use these commands to load the data. The matrix processPredictors contains the 57 predictors (12 describing the input biological material and 45 describing the process predictors) for the 176 manufacturing runs. Yield contains the percent yield for each run.**
+
+
+```{r load_chemical}
+#library(AppliedPredictiveModeling)
+#Load data
+data(ChemicalManufacturingProcess)
+#Copy data
+chemical_df <- ChemicalManufacturingProcess
+```
+
+
+### b. 
+
+**A small percentage of cells in the predictor set contain missing values. Use an imputation function to fill in these missing values (e.g., see Sect. 3.8).**
+
+When checking the data, we found that 28 of the 57 predictors had missing values, indicating that missing data affected fewer than half of the predictors. `ManufacturingProcess03` had the largest proportion of missing values (8.52%), followed by `ManufacturingProcess11` (5.68%) and `ManufacturingProcess10` (5.11%). Other manufacturing process predictors have missing values ranging from 2.84% to 0.57%. Missing values were more concentrated in the manufacturing process predictors than in the biological material forecasters. This concentration means that missing data predominantly impacts the portion of the dataset that can be controlled or altered, which is consistent with the purpose of optimizing these parameters to increase yield. 
+
+KNN Imputation was selected for this dataset from Section 3.8. Unlike mean imputation, which can oversimplify datasets, KNN takes into account the links between observations. This method is beneficial if there is an underlying similarity structure in the manufacturing process data, allowing us to estimate missing values using similar rows. KNN adjusts to both the pattern and amplitude of surrounding data points, which may result in more realistic imputed values. Because only a tiny percentage of values are missing, the computational cost of KNN is doable for this dataset, even with 57 predictors.
+
+To handle the imputation, we use the caret package's preProcess and specify method = 'knnImpute'. By default, KNN imputation in caret utilizes an acceptable number of neighbors, although this can be changed if necessary. To keep things simple, we'll use the default settings here. 
+
+```{r impute_na_chemical}
+#Calculate the percentage of NAs
+na_summary <- data.frame(predictor = colnames(chemical_df), 
+                         na_percent = colSums(is.na(chemical_df)) / nrow(chemical_df) * 100) %>%
+              filter(na_percent > 0) %>%
+              arrange(desc(na_percent))
+#Fix row names
+rownames(na_summary) <- NULL
+na_summary
+
+#KNN imputation
+preProcess_knn <- preProcess(chemical_df, method = 'knnImpute')
+chemical_df <- predict(preProcess_knn, newdata = chemical_df)
+
+#Check for remaining NAs
+sum(is.na(chemical_df))
+```
+
+
+### c. 
+
+**Split the data into a training and a test set, pre-process the data, and tune a model of your choice from this chapter. What is the optimal value of the performance metric?**
+
+First, we used the nearZeroVar function to select out predictors with very little variation. Following this phase, the dataset had 56 predictors instead of 57. Next, we split the training and testing datasets 80/20, with 144 observations in the training set and 32 in the testing set. Before fitting the model, we centered and scaled the predictors. This preprocessing step ensures that all variables are on the same scale. This is especially crucial for Elastic Net regularization, which incorporates both L1 and L2  penalties. We used three rounds of 10-fold cross-validation to tweak the Elastic Net model. This repeated CV strategy reduces the variance in performance measurements, resulting in a more trustworthy estimate of model performance. We conducted a grid search across a variety of values for the alpha and lambda hyperparameters. The best hyperparameters are alpha=0.1, lambda=0.31. The model produced R^2 of 0.6207435 and an RMSE of 0.6188371 on the training set (cross-validated).
+
+```{r train_model}
+#Filter out predictors with low frequencies nearZeroVar()
+nzv <- nearZeroVar(chemical_df, saveMetrics = TRUE)
+chemical_df <- chemical_df[, !nzv$nzv]
+
+#56 predictors left after nearZeroVar
+ncol(chemical_df)
+
+#Split data
+set.seed(547) 
+trainidx <- createDataPartition(chemical_df$Yield, p = 0.8, list = FALSE)
+train_df <- chemical_df[trainidx, ]
+test_df <- chemical_df[-trainidx, ]
+str(train_df)
+str(test_df)
+
+#Train Elastic Net
+enetGrid <-  expand.grid(alpha = seq(0.1, 1, by = 0.1), lambda = seq(0.01, 0.5, by = 0.05))
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 3) 
+enet_model <- train(
+  Yield ~ ., data = train_df,
+  method = "glmnet",
+  tuneGrid = enetGrid,
+  trControl = control,
+  metric = "RMSE",
+  preProcess = c("center", "scale")
+)
+#Optimal alpa=0.1, lambda= 0.31, R2 =0.6207435 RMSE= 0.6188371
+enet_model$bestTune
+enet_model$results[enet_model$results$alpha == enet_model$bestTune$alpha & enet_model$results$lambda == enet_model$bestTune$lambda, ]
+plot(enet_model)
+```
+
+
+### d.
+
+**Predict the response for the test set. What is the value of the performance metric and how does this compare with the resampled performance metric on the training set?**
+
+We evaluated the Elastic Net model's performance on the test set by generating predictions and calculating important metrics. Test metrics: R^2 = 0.517, RMSE=0.708. Train metrics: R^2=0.621, RMSE=0.619. The test set RMSE (0.708) is somewhat higher than the cross-validated RMSE on the training set (0.619), as expected given the model's exposure to unseen data in the test set. The test set has a slightly lower R^2 (0.517) than the training set (0.621), indicating a modest decrease in explained variance.
+
+The model generalizes reasonably well from training to test data, with just a modest drop in performance. The model's close match in RMSE and R^2 across training and test sets indicates no substantial underfitting or overfitting, making it a viable choice for forecasting yield in similar manufacturing datasets.
+
+
+```{r predict_chemical}
+#R2 = 0.5167401 RMSE= 0.7084928
+enet_predict <- predict(enet_model, newdata = test_df)
+enet_r2 <-  R2(enet_predict, test_df$Yield)
+enet_rmse <- RMSE(enet_predict, test_df$Yield)
+enet_r2
+enet_rmse
+```
+
+
+### e.
+
+**Which predictors are most important in the model you have trained? Do either the biological or process predictors dominate the list?**
+
+According to the variable importance plot, the most influential predictors in the Elastic Net model are process predictors:
+
+- ManufacturingProcess32 is the strongest predictor, with a significance score of 0.23250, followed by ManufacturingProcess09 (0.15012) and ManufacturingProcess36 (0.12482). Other manufacturing predictions on the top list include ManufacturingProcess17, ManufacturingProcess13, ManufacturingProcess34, ManufacturingProcess37, and ManufacturingProcess11.
+
+- BiologicalMaterial03 and BiologicalMaterial06 are biological predictors with quite high significance ratings (0.08144 and 0.06183, respectively). However, they are often less important than the primary manufacturing predictors. Other biological predictors appear lower on the list and have a less impact on yield predictions.
+
+Overall, Manufacturing Process predictors dominate the model's relevance rankings, implying that changes to the manufacturing process may have a greater impact on yield than variations in biological materials. This dominance is consistent with the model's emphasis on forecasting and potentially optimizing yield, as manufacturing process variables can be adjusted and managed to maximize yield results.
+
+```{r predictors_chemicals}
+#Variable importance
+vif <- varImp(enet_model, scale = FALSE)
+vif
+
+#Plot top 10 predictors' importance
+plot(vif, top = 10)
+```
+
+
+### f.
+
+**Explore the relationships between each of the top predictors and the response. How could this information be helpful in improving yield in future runs of the manufacturing process?**
+
+When we examine the top ten predictors for their link with Yield, we see varied degrees of positive and negative correlation.
+
+ManufacturingProcess32: This predictor has a high positive link with yield (0.61). As shown in the scatter plot, greater values correlate with higher yields. This shows that raising or optimizing this predictor may improve yield, making it an important parameter to monitor and alter during the manufacturing process.
+
+ManufacturingProcess09: Another positively linked predictor, it has a 0.50 correlation with Yield. The scatter plot's increasing trend shows that higher predictor values are often associated with increased yield. Focusing on this variable may also help to enhance yields.
+
+ManufacturingProcess36: This predictor has a negative connection with Yield (-0.53). The scatter plot supports the adverse link, with higher predictor values correlated with poorer yields. Reducing or adjusting the values may enhance yield.
+
+ManufacturingProcess17: Like ManufacturingProcess36, it has a -0.43 association with Yield. Optimizing this parameter by lowering its value may contribute to higher yield.
+
+ManufacturingProcess13: It has a correlation of -0.50. Reducing this predictor's value during the production process may help to increase yield.
+
+BiologicalMaterial03: This biological predictor has a 0.45 positive association with Yield, indicating that higher predictor quality is connected with increased yield. Although this predictor cannot be adjusted throughout the production process, it can be used to assess raw material quality prior to processing, allowing for the selection of higher-quality inputs.
+
+ManufacturingProcess34: This predictor has a weaker positive link with Yield (correlation=0.18). While not as influential as others, minor changes to this variable may nevertheless lead to better outcomes, albeit the influence may be minimal.
+
+ManufacturingProcess37 shows a weak negative connection with Yield (-0.16). While it has a minimal impact on yield, monitoring it as part of the whole manufacturing process may aid in process improvement.
+
+BiologicalMaterial06: With a correlation of 0.48, this biological material predictor has a favorable effect on yield. It emphasizes the importance of raw material quality, as does BiologicalMaterial03, and can aid in the selection of appropriate raw material batches.
+
+ManufacturingProcess11: This predictor has a somewhat positive connection with Yield (0.35). Adjusting this predictor could help improve yield, although its impact may be less substantial than top predictors like ManufacturingProcess32 and ManufacturingProcess09.
+
+
+As a result, increasing positevily correlated predictors like ManufacturingProcess32 and ManufacturingProcess09 values may immediately increase Yield. These predictors have a substantial and positive correlation with yield, making them important variables to regulate. Lowering the values of negative predictors like ManufacturingProcess36, ManufacturingProcess17, and ManufacturingProcess13 may prevent yield losses, as larger values of these predictors correspond to lower yields. The favorable associations between BiologicalMaterial03 and BiologicalMaterial06 and Yield emphasize the importance of using high-quality raw materials. Although these predictors cannot be adjusted during the manufacturing process, they can be utilized as quality controls to ensure that only high-quality materials are used in production, potentially leading to higher yields.
+
+```{r target_predictors_chemical}
+#Target vs top predictors
+top_predictors <- rownames(vif$importance)[order(vif$importance$Overall, decreasing = TRUE)[1:10]]
+for (predictor in top_predictors) {
+  p <- ggplot(chemical_df, aes(x = .data[[predictor]], y = Yield)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    ggtitle(paste("Relationship between", predictor, "and Yield")) +
+    theme_minimal()
+  
+  print(p)  
+}
+
+#Corr matrix
+top_predictors <- c("Yield", "ManufacturingProcess32", "ManufacturingProcess09", "ManufacturingProcess36", "ManufacturingProcess17", "ManufacturingProcess13", "BiologicalMaterial03",  "ManufacturingProcess34", "ManufacturingProcess37", "BiologicalMaterial06", "ManufacturingProcess11")
+
+#Include only the top predictors and Yield
+corr_data <- chemical_df[, top_predictors]
+
+#Correlation matrix
+correlation_matrix <- cor(corr_data, use = "complete.obs")
+
+#Plot
+corrplot(correlation_matrix,  tl.cex = 0.5,method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45, addCoef.col = "black", order="hclust",  number.cex=0.5, diag=FALSE)
+
+```
