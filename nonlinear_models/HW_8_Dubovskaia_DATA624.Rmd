@@ -1,0 +1,467 @@
+---
+title: "Homework 8. Linear Regression"
+author: "Daria Dubovskaia"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: hide
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+editor_options:
+  chunk_output_type: console
+  markdown:
+    wrap: sentence
+---
+
+
+```{r setup, message=FALSE, warning=FALSE}
+#chunks
+knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+#libraries
+library(tidyverse)
+library(fpp3)
+library(latex2exp)
+library(seasonal)
+library(GGally)
+library(gridExtra)
+library(reshape2)
+library(Hmisc)
+library(corrplot)
+library(e1071)
+library(caret)
+library(VIM)
+library(forecast)
+library(urca)
+library(earth)
+library(glmnet)
+library(kernlab)
+library(aTSA)
+library(AppliedPredictiveModeling)
+library(mlbench)
+```
+
+
+## 7.2. 
+
+**Friedman (1991) introduced several benchmark data sets create by simulation. One of these simulations used the following nonlinear equation to create data:**
+
+\[
+y = 10 sin(πx1x2) + 20(x_3 − 0.5)^2 + 10x_4 + 5x_5 + N(0, σ^2)
+\]
+
+where the x values are random variables uniformly distributed between [0, 1] (there are also 5 other non-informative variables also created in the simulation). The package mlbench contains a function called mlbench.friedman1 that simulates these data:
+
+```{r}
+#library(mlbench)
+set.seed(200)
+trainingData <- mlbench.friedman1(200, sd = 1)
+## We convert the 'x' data from a matrix to a data frame
+## One reason is that this will give the columns names.
+trainingData$x <- data.frame(trainingData$x)
+## Look at the data using
+featurePlot(trainingData$x, trainingData$y)
+## or other methods.
+
+## This creates a list with a vector 'y' and a matrix
+## of predictors 'x'. Also simulate a large test set to
+## estimate the true error rate with good precision:
+testData <- mlbench.friedman1(5000, sd = 1)
+testData$x <- data.frame(testData$x)
+```
+
+**Tune several models on these data. Which models appear to give the best performance? Does MARS select the informative predictors (those named X1–X5)?**
+
+We compared the performance of four different models (KNN, MARS, SVM, avNNet) on a simulated dataset generated with the Friedman nonlinear function. Cross-validation was used to adjust and assess each model on a training set before evaluating it on a test set as well as centering and scaling. 
+
+**K-Nearest Neighbors**
+
+KNN was tuned by adjusting the number of neighbors k between 1-20 in tuneGrid. We used cross-validation with 10 folds to get the optimal value of k. KNN is based on distance computations, therefore centering and scaling ensured that all predictors contribute equally to the distance metric. The optimal number of neighbors was k=8, RMSE = 3.07, R^2 = 0.66, MAE = 2.49. Test set: RMSE = 3.11, R^2 = 0.65, MAE = 2.48. KNN demonstrated moderate performance.
+
+```{r knn_model}
+set.seed(200)
+#library(caret)
+#Train KNN
+knnModel <- train(x = trainingData$x, 
+                  y = trainingData$y, 
+                  method = "knn", 
+                  preProc = c("center", "scale"), 
+                  tuneGrid = data.frame(.k = 1:20),
+                  trControl = trainControl(method = "cv")
+                  )
+
+#k=8 RMSE=3.074962 R2=0.6556194 MAE=2.488575
+knnModel$results[knnModel$results$k == knnModel$bestTune$k, ]
+
+knnPred <- predict(knnModel, newdata = testData$x)
+#RMSE=3.1098993 R2=0.6501397 MAE=2.4792214 
+knn_results <- postResample(pred = knnPred, obs = testData$y)
+knn_results
+```
+
+
+**Multivariate adaptive regression splines**
+
+MARS was modified by adjusting the degree (interaction level, 1 or 2) and nprune (number of model terms, 2 to 20) in tuneGrid. Cross-validation was used to determine the most effective combination of these factors. Centering and scaling were used to increase model performance and interpretability. The best setup was nprune = 16 and degree = 2, RMSE = 1.24, R^2 = 0.93, MAE = 0.99. Test set: RMSE = 1.28, R^2 = 0.93, MAE = 1.01. MARS outperformed KNN, with a low RMSE and a high R^2.
+
+The MARS model ranks the predictors as follows: X1 is the most critical factor, followed by X4, X2, and X5. X3 is assigned zero relevance. This could be due to the squared part in the equation (X3 − 0.5)^2 having a subtler effect on y compared to the sinusoidal and linear terms associated with the other predictors. Overall, MARS correctly detects and emphasizes the majority of the useful predictors (X1, X2, X4, and X5).
+
+```{r mars_model}
+set.seed(200)
+marsGrid <- expand.grid(degree = 1:2, nprune = 2:20)
+#Train MARS
+marsModel <- train(
+  x = trainingData$x,
+  y = trainingData$y,
+  method = "earth",
+  preProc = c("center", "scale"),
+  tuneGrid = marsGrid,
+  trControl = trainControl(method = "cv")
+)
+
+#nprune = 16 degree = 2 RMSE=1.238511 R2=0.9327014 MAE=0.9875981
+marsModel$results[marsModel$results$nprune == marsModel$bestTune$nprune & marsModel$results$degree == marsModel$bestTune$degree, ]
+
+marsPred <- predict(marsModel, newdata = testData$x)
+#RMSE=1.2793868 R2=0.9343367 MAE=1.0091132 
+mars_results <- postResample(pred = marsPred, obs = testData$y)
+mars_results
+
+varImp(marsModel)
+```
+
+**Support Vector Machine, Radial basis function kernel**
+
+SVM was tuned using a range of values for the regularization parameter c and 10 levels given by the tuneLength parameter in cross-validation. Because the SVM relies on a radial basis function kernel, centering and scaling are required. The best values were sigma = 0.063 and C = 8, RMSE = 1.92, R^2 = 0.84, MAE = 1.53. Test set: RMSE = 2.05; R^2 = 0.83, MAE = 1.56. SVM outperformed KNN but not as well as MARS. With an RMSE of 2.05, it captured some of the nonlinear structure, but not as well as MARS.
+
+```{r svm_model}
+set.seed(200)
+#Train SVM
+svmModel <- train(x = trainingData$x,
+                  y = trainingData$y,
+                  method = "svmRadial",
+                  preProc = c("center", "scale"),
+                  tuneLength = 10,
+                  trControl = trainControl(method = "cv")
+                  )
+
+#sigma = 0.06299324 C = 8 RMSE=1.915665 R2=0.8475605 MAE=1.528648
+svmModel$results[svmModel$results$sigma == svmModel$bestTune$sigma & svmModel$results$C == svmModel$bestTune$C, ]
+
+svmPred <- predict(svmModel, newdata = testData$x)
+#RMSE=2.0541197 R2=0.8290353 MAE=1.5586411 
+svm_results <- postResample(pred = svmPred, obs = testData$y)
+svm_results
+```
+
+**Averaged Neural Network**
+
+An averaged neural network was trained with 10 repetitions, each utilizing a different size and decay in tuneGrid. Cross-validation was used to determine the optimal arrangement. Centering and scaling accelerated the neural network's convergence and increased stability throughout training. The optimal parameters were size = 4, decay = 0.01, bag = FALSE, RMSE = 1.95, R^2 = 0.84, MAE = 1.57. Test set: RMSE = 2.14, R^2 = 0.82, MAE = 1.58. The neural network performed similarly to the SVM, with an RMSE of 2.14. While it recorded some nonlinear interactions, it was not as effective as MARS.
+
+```{r nnet_model}
+set.seed(200)
+#Train avNNet
+nnetGrid <- expand.grid(.decay = c(0, 0.01, 0.1), .size = 1:10, .bag = FALSE)
+
+nnetModel <- train(x = trainingData$x,
+                   y = trainingData$y,
+                   method = "avNNet",
+                   preProc = c("center", "scale"),
+                   tuneGrid = nnetGrid,
+                   trControl = trainControl(method = "cv"),
+                   linout = TRUE,
+                   trace = FALSE,
+                   repeats = 10)  
+
+#size = 4, decay = 0.01 and bag = FALSE RMSE=1.951284 R2=0.8377085 MAE=1.568446
+nnetModel$results[nnetModel$results$size == nnetModel$bestTune$size & nnetModel$results$decay == nnetModel$bestTune$decay, ]
+
+nnetPred <- predict(nnetModel, newdata = testData$x)
+#RMSE=2.1393107 R2=0.8199814 MAE=1.5778547 
+nnet_results <- postResample(pred = nnetPred, obs = testData$y)
+nnet_results
+```
+
+Based on the summary plot and table below, MARS outperformed all other models, with the lowest RMSE (1.28), highest R^2 (0.93), and lowest MAE (1.01). This suggests that MARS was the most effective model for detecting nonlinear interactions in the data. SVM and avNNet fared pretty well, but were not as good as MARS. KNN has the largest RMSE and lowest R^2, making it unsuitable for this dataset, probably because to its inability to capture complicated nonlinear interactions. 
+
+MARS is the recommended model for this dataset due to its superior performance in RMSE, R^2, and MAE. MARS effectively captured the nonlinear relationships needed to describe the response variable by selecting useful predictors (X1, X2, X4, X5). This model's capacity to handle interactions and nonlinear transformations makes it the best option for predicting outcomes in the Friedman dataset simulation.
+
+```{r results}
+#Create empty df
+results <- data.frame(
+  Model = character(),
+  RMSE = numeric(),
+  R2 = numeric(),
+  MAE = numeric(),
+  stringsAsFactors = FALSE
+)
+#Add results to df
+results <- rbind(results, data.frame(Model = "KNN", RMSE = knn_results[1], R2 = knn_results[2], MAE = knn_results[3]))
+results <- rbind(results, data.frame(Model = "MARS", RMSE = mars_results[1], R2 = mars_results[2], MAE = mars_results[3]))
+results <- rbind(results, data.frame(Model = "SVM", RMSE = svm_results[1], R2 = svm_results[2], MAE = svm_results[3]))
+results <- rbind(results, data.frame(Model = "avNNet", RMSE = nnet_results[1], R2 = nnet_results[2], MAE = nnet_results[3]))
+row.names(results) <- NULL
+
+results
+
+#Plot results
+results_long <- melt(results, id.vars = "Model", measure.vars = c("RMSE", "MAE", "R2"))
+ggplot(results_long, aes(x = Model, y = value, fill = variable)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Model Performance Comparison", y = "Metric Value", x = "Model") +
+  scale_fill_manual(values = c("RMSE" = "skyblue", "MAE" = "lightgreen", "R2" = "coral"), name = "Metric") +
+  theme_minimal() +
+  theme(legend.position = "top") 
+```
+
+
+## 7.5. 
+
+**Exercise 6.3 describes data for a chemical manufacturing process. Use the same data imputation, data splitting, and pre-processing steps as before and train several nonlinear regression models.**
+
+We used the same preprocessing steps as in 6.3 for the ChemicalManufacturingProcess dataset:
+
+- Missing values were imputed using KNN imputation.
+
+- Low-variance predictors were removed to reduce redundancy and increase model stability with near zero variance.
+
+- The data was divided into two sets: 80% (144) training and 20% test (32).
+
+Three nonlinear regression models were trained: MARS, SVM with radial kernel, and avNNet. Each model's training approach involved resampling (cross-validation) to determine the optimum hyperparameters as well as scaling/centering and estimate model performance on previously unknown data.
+
+```{r load_chemical}
+set.seed(547) 
+#Load data
+data(ChemicalManufacturingProcess)
+#Copy data
+chemical_df <- ChemicalManufacturingProcess
+
+#KNN imputation
+preProcess_knn <- preProcess(chemical_df, method = 'knnImpute')
+chemical_df <- predict(preProcess_knn, newdata = chemical_df)
+
+#Filter out predictors with low frequencies nearZeroVar()
+nzv <- nearZeroVar(chemical_df, saveMetrics = TRUE)
+chemical_df <- chemical_df[, !nzv$nzv]
+
+#Split data
+trainidx <- createDataPartition(chemical_df$Yield, p = 0.8, list = FALSE)
+train_df <- chemical_df[trainidx, ]
+test_df <- chemical_df[-trainidx, ]
+```
+
+
+**MARS**
+
+The model was tweaked using two hyperparameters: degree which determines the level of interaction terms (1 = main effects alone, 2 = two-way interactions, etc.); nprune which restricts the number of basis functions to prevent overfitting. During cross-validation and testing of training data, caret automatically applies centering and scaling. Optimal parameters: degree = 1, nprune = 5,RMSE = 0.64, R^2 = 0.61, MAE = 0.52. Testing Set: RMSE = 0.66, R^2 = 0.57, MAE = 0.53.
+
+```{r mars_model_chemical}
+set.seed(547) 
+#Train MARS
+marsGrid <- expand.grid(degree = 1:2, nprune = 2:20)
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 3) 
+
+marsModel <- train(Yield ~ ., data = train_df,
+                   method = "earth",
+                   preProc = c("center", "scale"),
+                   tuneGrid = marsGrid,
+                   trControl = control
+)
+
+#nprune = 4 degree = 1 RMSE=0.6399415 R2=0.6092022 MAE=0.5200138
+mars_tune <- marsModel$results[marsModel$results$nprune == marsModel$bestTune$nprune & marsModel$results$degree == marsModel$bestTune$degree, ]
+mars_tune
+
+marsPred <- predict(marsModel, newdata = test_df)
+#RMSE=0.6625520 R2=0.5754748 MAE=0.5293301 
+mars_results <- postResample(pred = marsPred, obs = test_df$Yield)
+mars_results
+```
+
+**SVM**
+
+SVM using a radial basis kernel is effective at capturing nonlinear relationships. The model was tweaked using: C which determines the trade-off between margin maximization and categorization error, sigma which determines the dispersion of the radial kernel. During cross-validation and testing of training data, caret automatically applies centering and scaling. Optimal parameters: sigma = 0.01, C = 10, RMSE = 0.611, R^2 = 0.64, MAE = 0.49. Test Set: RMSE = 0.56, R^2 = 0.73, MAE = 0.4.
+
+```{r svm_model_chemical}
+set.seed(547) 
+#Train SVM
+svmGrid <- expand.grid(sigma = c(0.001, 0.01, 0.1), C = c(0.1, 1, 10, 100))
+svmModel <- train(Yield ~ ., data = train_df,
+                  method = "svmRadial", 
+                  preProc = c("center", "scale"),
+                  tuneGrid = svmGrid,
+                  trControl = control
+                  )
+
+#sigma = 0.01 C = 10 RMSE=0.6112615 R2=0.6418196 MAE=0.4952609
+svm_tune <- svmModel$results[svmModel$results$sigma == svmModel$bestTune$sigma & svmModel$results$C == svmModel$bestTune$C, ]
+svm_tune
+
+svmPred <- predict(svmModel, newdata = test_df)
+#RMSE=0.5578873 R2=0.7302899 MAE=0.4038730
+svm_results <- postResample(pred = svmPred, obs = test_df$Yield)
+svm_results
+```
+
+**avNNet**
+
+The avNNet model is a collection of neural networks that reduce variation via averaging. The model was tweaked using: size which indicates the number of units in the concealed layer, decay which is a regularization parameter to prevent overfitting. During cross-validation and testing of training data, caret automatically applies centering and scaling. Optimal parameters: size = 4, decay = 0.1, RMSE = 0.59, R^2 = 0.67, MAE = 0.47. Test Set: RMSE = 0.68, R^2 = 0.54, MAE = 0.49.
+
+```{r nnet_model_chemical}
+#Train avNNet
+set.seed(547) 
+nnetGrid <- expand.grid(.decay = c(0, 0.01, 0.1), .size = 1:10, .bag = FALSE)
+
+nnetModel <- train(Yield ~ ., data = train_df,
+                   method = "avNNet",
+                   preProc = c("center", "scale"),
+                   tuneGrid = nnetGrid,
+                   trControl = trainControl(method = "cv"),
+                   linout = TRUE,
+                   trace = FALSE,
+                   repeats = 10)  
+
+#size = 4, decay = 0.01 and bag = FALSE RMSE=0.5896897 R2=0.6694208 MAE=0.4743314
+nnet_tune <- nnetModel$results[nnetModel$results$size == nnetModel$bestTune$size & nnetModel$results$decay == nnetModel$bestTune$decay, ]
+nnet_tune
+
+nnetPred <- predict(nnetModel, newdata = test_df)
+#RMSE=0.6831675 R2=0.5382843 MAE=0.4942331 
+nnet_results <- postResample(pred = nnetPred, obs = test_df$Yield)
+nnet_results
+```
+
+
+
+### a. Which nonlinear regression model gives the optimal resampling and test set performance?
+
+The test set results show that the SVM model with radial kernel performs best, with the lowest RMSE (0.58), greatest R^2 (0.73), and lowest MAE (0.4). This model generalizes well, as evidenced by its excellent performance on both the resampled and test datasets. Despite having the lowest resampling RMSE, avNNet did not perform as well on the test set, indicating possible overfitting. MARS also performed reasonably well, albeit with somewhat larger mistakes than SVM. As a result, for this chemical manufacturing process dataset, the SVM model with radial kernel strikes the best compromise between predictive accuracy and generalization. It would be the preferred method for estimating yield in subsequent cycles of this manufacturing process.
+
+```{r result_table_chemicals}
+#Create empty df
+results <- data.frame(
+  Model = character(),
+  Resample_RMSE = numeric(),
+  Resample_R2 = numeric(),
+  Resample_MAE = numeric(),
+  Test_RMSE = numeric(),
+  Test_R2 = numeric(),
+  Test_MAE = numeric(),
+  stringsAsFactors = FALSE
+)
+
+#Fill df with results
+results <- rbind(results, data.frame(Model = "MARS", Resample_RMSE = mars_tune$RMSE, Resample_R2 = mars_tune$Rsquared, Resample_MAE = mars_tune$MAE, Test_RMSE = mars_results[1], Test_R2 = mars_results[2], Test_MAE = mars_results[3]))
+results <- rbind(results, data.frame(Model = "SVM", Resample_RMSE = svm_tune$RMSE, Resample_R2 = svm_tune$Rsquared, Resample_MAE = svm_tune$MAE, Test_RMSE = svm_results[1], Test_R2 = svm_results[2], Test_MAE = svm_results[3]))
+results <- rbind(results, data.frame(Model = "avNNet", Resample_RMSE = nnet_tune$RMSE, Resample_R2 = nnet_tune$Rsquared, Resample_MAE = nnet_tune$MAE, Test_RMSE = nnet_results[1], Test_R2 = nnet_results[2], Test_MAE = nnet_results[3]))
+row.names(results) <- NULL
+
+results
+```
+
+### b. Which predictors are most important in the optimal nonlinear regression model? Do either the biological or process variables dominate the list? How do the top ten important predictors compare to the top ten predictors from the optimal linear model?
+
+We will compare the top predictors in the SVM model to those in the Elastic Net linear mode. 
+
+The SVM model's top ten most important predictors contain both manufacturing process and biological characteristics. ManufacturingProcess32 is the top-ranked predictor, with an importance score of 0.39, indicating that it has the most influence on yield prediction. Following closely behind are BiologicalMaterial06 (0.33) and BiologicalMaterial03 (0.32), indicating that biological materials play an important role in the nonlinear SVM model. Other significant predictors are ManufacturingProcess13 (0.32), ManufacturingProcess36 (0.31), ManufacturingProcess31 (0.29), ManufacturingProcess17 (0.29), BiologicalMaterial02 (0.28), ManufacturingProcess09 (0.25), BiologicalMaterial1 (0.24).
+
+Interestingly, the SVM model has a larger presence of biological predictors among the top-ranked variables than the Elastic Net model. In fact, four of the top 10 predictors in the SVM model are biological materials (BiologicalMaterial06, BiologicalMaterial03, BiologicalMaterial02, BiologicalMaterial12), while the remaining six predict manufacturing processes.
+
+In the Elastic Net model, manufacturing process predictors topped the list of key variables as shown on the plot below. The top five predictors were ManufacturingProcess32, ManufacturingProcess09, ManufacturingProcess36, ManufacturingProcess17, and ManufacturingProcess13. Only two biological factors (BiologicalMaterial03 and BiologicalMaterial06) were among the top ten most important predictors, with much lower importance scores than the manufacturing process predictors.
+
+In contrast, the SVM model prioritizes biological materials, with biological predictors such as BiologicalMaterial06 and BiologicalMaterial03 scoring almost as well as the top manufacturing process predictors. This shift implies that the nonlinear SVM model captures complicated relationships in the data that the linear model may not fully explain. In a nonlinear setting, biological materials appear to contribute more to the model's predictive capability, most likely due to non-linear interactions with other predictors that the SVM can capture. 
+
+In the nonlinear SVM model, both manufacturing process and biological predictors are important, with a greater emphasis on biological predictors than in the Elastic Net model. This finding can be useful for optimizing the manufacturing process since it implies that, in addition to process improvements, improving the quality or consistency of biological materials may result in higher yield outcomes.
+
+```{r predictors_chemicals}
+#Variable importance
+vif <- varImp(svmModel, scale = FALSE)
+vif
+
+set.seed(547) 
+#Train Elastic Net
+enetGrid <-  expand.grid(alpha = seq(0.1, 1, by = 0.1), lambda = seq(0.01, 0.5, by = 0.05))
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 3) 
+enet_model <- train(
+  Yield ~ ., data = train_df,
+  method = "glmnet",
+  tuneGrid = enetGrid,
+  trControl = control,
+  metric = "RMSE",
+  preProcess = c("center", "scale")
+)
+
+
+#Variable importance
+vif_enet <- varImp(enet_model, scale = FALSE)
+#Plot top 10 predictors' importance
+plt_enet <- plot(vif_enet, top = 10, main = "elnet from 6.3, top 10 predictors")
+
+#Plot top 10 predictors' importance SVM
+plt_svm <- plot(vif, top = 10, main = "SVM model, top 10 predictors")
+
+grid.arrange(plt_enet, plt_svm,  ncol = 2)
+```
+
+
+### c. Explore the relationships between the top predictors and the response for the predictors that are unique to the optimal nonlinear regression model. Do these plots reveal intuition about the biological or process predictors and their relationship with yield?
+
+ManufacturingProcess32: There is a positive association with Yield (0.6), implying that increases in this predictor tend to boost yield. This variable can most likely be modified during the process to increase yield directly.
+
+BiologicalMaterial06: Shows a positive relationship with Yield (0.48), implying that higher quality or quantities of this material result in greater yield. Because this is a biological variable, it can be used to pick raw materials based on their quality.
+
+BiologicalMaterial03: Shows a positive relationship with Yield (0.44). Improvements in this biological material, whether through selection or preprocessing, may increase yield.
+
+ManufacturingProcess13: Shows a negative connection with yield (-0.51). This suggests that adjusting this process parameter may reduce yield losses.
+
+ManufacturingProcess36: It also has a negative relationship with yield (-0.53). Reducing the values of this predictor during production may assist improve yield.
+
+ManufacturingProcess31: Although the plot indicates a less obvious trend, the minor negative connection with Yield suggests that it may not be as effective a predictor as others (-0.071). This predictor may be less crucial, but it is still important to watch.
+
+ManufacturingProcess17: Has a negative association with yield (-0.43). If the relationship holds consistently, adjusting this variable may enhance the yield.
+
+BiologicalMaterial02: Shows a high positive correlation with yield (0.48). This indicates that the quality of this biological material has a direct impact on yield, emphasizing the necessity of raw material selection.
+
+ManufacturingProcess09: Positively associated with yield (0.5). Controlling this process predictor could result in yield increases.
+
+BiologicalMaterial12: Shows a modestly positive association with Yield (0.37). This variable's role in raw material selection may aid in maintaining consistent yield levels.
+
+The biological predictors in the SVM model (e.g., BiologicalMaterial06, BiologicalMaterial02, and BiologicalMaterial12) have a strong positive connection with Yield, indicating that higher quality raw materials are critical for improved yield outcomes. This observation emphasizes the significance of quality control for incoming biological resources.
+
+The process predictors ManufacturingProcess32, ManufacturingProcess13, and ManufacturingProcess36 have mixed correlations. For example, some process predictors are positively associated with Yield (e.g., ManufacturingProcess32), while others are adversely associated (e.g., ManufacturingProcess13). This shows that regulating some manufacturing process characteristics can assist reduce yield losses, while improving others can increase yield.
+
+The unique predictors revealed by the SVM model, which incorporates nonlinear dependencies, show subtle interactions with yield. These unique predictors provide extra process control points. Biological Predictors (e.g., **BiologicalMaterial02, BiologicalMaterial12**) emphasize the relevance of high-quality raw materials while demonstrating that specific biological features influence yield in nonlinear ways.
+
+By focusing on enhancing the quality of biological inputs and fine-tuning essential manufacturing process parameters, the yield in the chemical production process may be increased.
+
+```{r target_predictors_chemical}
+#Target vs top predictors
+top_predictors <- rownames(vif$importance)[order(vif$importance$Overall, decreasing = TRUE)[1:10]]
+#List for plots
+plot_list <- list()
+for (i in seq_along(top_predictors)) {
+  predictor <- top_predictors[i]
+  plot_list[[i]] <- ggplot(chemical_df, aes(x = .data[[predictor]], y = Yield)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    ggtitle(paste(predictor, "and Yield")) +
+    theme_minimal()
+}
+grid.arrange(grobs = plot_list, ncol = 2)
+
+top_predictors <- c("Yield", "ManufacturingProcess32", "BiologicalMaterial06", "BiologicalMaterial03", "ManufacturingProcess13", "ManufacturingProcess36", "ManufacturingProcess31", "ManufacturingProcess17", "BiologicalMaterial02", "ManufacturingProcess09",  "BiologicalMaterial12")
+
+#Corr matrix
+corr_data <- chemical_df[, top_predictors]
+
+#Correlation matrix
+correlation_matrix <- cor(corr_data, use = "complete.obs")
+
+#Plot
+corrplot(correlation_matrix,  tl.cex = 0.5,method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45, addCoef.col = "black", order="hclust",  number.cex=0.5, diag=FALSE)
+
+```
