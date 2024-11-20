@@ -1,5 +1,5 @@
 ---
-title: "Homework 9. Linear Regression"
+title: "Homework 9. Trees and Rules"
 author: "Daria Dubovskaia"
 output:
   html_document:
