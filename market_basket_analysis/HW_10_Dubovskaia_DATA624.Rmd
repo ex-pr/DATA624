@@ -1,0 +1,63 @@
+---
+title: "Homework 10. Market Basket Analysis"
+author: "Daria Dubovskaia"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: hide
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+editor_options:
+  chunk_output_type: console
+  markdown:
+    wrap: sentence
+---
+
+
+```{r setup, message=FALSE, warning=FALSE}
+#chunks
+knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+#libraries
+library(tidyverse)
+library(fpp3)
+library(latex2exp)
+library(seasonal)
+library(GGally)
+library(gridExtra)
+library(reshape2)
+library(Hmisc)
+library(corrplot)
+library(e1071)
+library(caret)
+library(VIM)
+library(rpart)
+library(forecast)
+library(urca)
+library(earth)
+library(glmnet)
+library(kernlab)
+library(aTSA)
+library(AppliedPredictiveModeling)
+library(mlbench)
+library(randomForest)
+library(party)
+library(gbm)
+library(Cubist)
+library(partykit)
+```
+
+
+Imagine 10000 receipts sitting on your table. Each receipt represents a transaction with items that were purchased. The receipt is a representation of stuff that went into a customer’s basket - and therefore ‘Market Basket Analysis’.
+
+That is exactly what the Groceries Data Set contains: a collection of receipts with each line representing 1 receipt and the items purchased. Each line is called a transaction and each column in a row represents an item.  The data set is attached.
+
+Your assignment is to use R to mine the data for association rules. You should report support, confidence and lift and your top 10 rules by lift. 
+
+Extra credit: do a simple cluster analysis on the data as well.  Use whichever packages you like.  
+
+
+
