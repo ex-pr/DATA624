@@ -16,6 +16,12 @@ editor_options:
     wrap: sentence
 ---
 
+<style>
+body {
+    text-align: justify; /* Justifies text */
+}
+</style>
+
 
 ```{r setup, message=FALSE, warning=FALSE}
 #chunks
@@ -24,8 +30,6 @@ knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig
 #libraries
 library(tidyverse)
 library(fpp3)
-library(latex2exp)
-library(seasonal)
 library(GGally)
 library(gridExtra)
 library(reshape2)
@@ -34,30 +38,139 @@ library(corrplot)
 library(e1071)
 library(caret)
 library(VIM)
-library(rpart)
 library(forecast)
 library(urca)
 library(earth)
-library(glmnet)
 library(kernlab)
 library(aTSA)
-library(AppliedPredictiveModeling)
-library(mlbench)
-library(randomForest)
-library(party)
-library(gbm)
-library(Cubist)
-library(partykit)
+library(arules)
+library(arulesViz)
+library(factoextra)
 ```
 
+# Assignment
+Imagine 10000 receipts sitting on your table. Each receipt represents a transaction with items that were purchased. The receipt is a representation of stuff that went into a customer’s basket - and therefore ‘Market Basket Analysis’. That is exactly what the Groceries Data Set contains: a collection of receipts with each line representing 1 receipt and the items purchased. Each line is called a transaction and each column in a row represents an item.  The data set is attached. Your assignment is to use R to mine the data for association rules. You should report support, confidence and lift and your top 10 rules by lift. Extra credit: do a simple cluster analysis on the data as well. Use whichever packages you like.
 
-Imagine 10000 receipts sitting on your table. Each receipt represents a transaction with items that were purchased. The receipt is a representation of stuff that went into a customer’s basket - and therefore ‘Market Basket Analysis’.
+# 1. Market Basket Analysis
 
-That is exactly what the Groceries Data Set contains: a collection of receipts with each line representing 1 receipt and the items purchased. Each line is called a transaction and each column in a row represents an item.  The data set is attached.
+The dataset was loaded from Github with read.transactions() function to convert it straight into a transactions object. There are 9,835 transcations in the dataset (each is a customer receipt), and 169 of unique items. The proportion of non-zero items in the transaction matrix is 2.61%. Most popular items are "whole milk," "other vegetables," "rolls/buns," "soda," and "yogurt."  
 
-Your assignment is to use R to mine the data for association rules. You should report support, confidence and lift and your top 10 rules by lift. 
+The apriori() function was used to generated rules with parameters:  
+Support Threshold =  0.01 (the rules apply to at least 1% of transactions)  
+The confidence threshold = 0.5 (rules must be accurate at least 50% of the time)  
 
-Extra credit: do a simple cluster analysis on the data as well.  Use whichever packages you like.  
+The table and the plot below show top 10 rules ranked by lift (the strength of the rule as contrasted to random chance). Edges represent rules, thicker edges and larger nodes suggest stronger lift-and-support laws. There is a significant connections between dairy products (e.g., "whole milk," "yogurt") and vegetables. The rule {citrus fruit, root vegetables} → {other vegetables} has the maximum lift (3.03), showing that customers who buy "citrus fruit" and "root vegetables" are more likely to buy "other vegetables." Dairy items, particularly "whole milk," are commonly used as the consequence in rules. The rule {rolls/buns, root vegetables} → {other vegetables} has a lift of 2.59, "rolls/buns" and "root vegetables" are moderately associated with "other vegetables," likely for meal preparation. The rule {root vegetables, yogurt} → {other vegetables} has a lift of (2.58) wwhich emphasizes the centrality of "other vegetables" in baskets. For other rules we also see the connection between dairy products, between fruits, vegetables and essential dairy products
 
+Based on the analysis, we can provide recommendations:  
+- For product Placement: keep "root vegetables" and "other vegetables" close together to facilitate cross-selling.  
+- For promotions: use rules with a high lift (for example, yogurt and curd with whole milk).
+- Make bundles of frequently linked items ("yogurt," "whole milk," "curd").  
+
+```{r load_data}
+# Load data from Github
+data <- read.transactions("https://raw.githubusercontent.com/ex-pr/DATA624/refs/heads/main/market_basket_analysis/GroceryDataSet.csv", sep = ",")
+basket_df <- data
+```
+
+```{r market_basket}
+##Check transcations
+set.seed(547)
+str(basket_df)
+summary(basket_df)
+inspect(head(basket_df))
+
+# Mine association rules
+rules <- apriori(basket_df, parameter = list(supp = 0.01, conf = 0.5))
+
+# Inspect summary of the rules
+summary(rules)
+
+# Sort and extract the top 10 rules by lift
+top_rules <- sort(rules, by = "lift")[1:10]
+
+# Display the top rules in an interactive table
+DT::datatable(
+  inspect(top_rules),
+  options = list(scrollX = TRUE,
+                 dom = 'lBfrtip',
+                 paging = FALSE,
+                 searching = FALSE),
+  rownames = FALSE,
+  caption = htmltools::tags$caption(
+    style = 'caption-side: top; text-align: left; font-size: 16px; font-weight: bold;',
+    'Top 10 Rules (by Lift)'
+  )
+)
+
+# Visualize the top rules as a graph
+plot(top_rules, method = "graph", engine = "htmlwidget")
+```
+
+# 2. Cluster analysis
+
+For the cluster analysis, we had to transform dataset to a binary matrix with rows as transactions, columns as items, each cell was 1 (purchased) or 0 (not purchased). We used 5 clusters (centers=5) and  20 random initializations (nstart=20):  
+Cluster 1: 1,349 transactions  
+Cluster 2: 780 transactions  
+Cluster 3: 4,952 transactions  
+Cluster 4: 1,373 transactions  
+Cluster 5: 1,381 transactions  
+
+The top five items for each cluster:  
+Cluster 1: soda, rolls/buns, bottled water, whole milk, shopping bags (quick purchases for daily needs)  
+Cluster 2: whole milk, yogurt, other vegetables, root vegetables, tropical fruit (health-conscious buying)  
+Cluster 3: rolls/buns, canned beer, yogurt, bottled water, shopping bags (beverages and snacks)  
+Cluster 4: whole milk, rolls/buns, root vegetables, yogurt, bottled water (dairy goods, fresh produce)  
+Cluster 5: other vegetables,  whole milk, rolls/buns, root vegetables, soda (fresh produce with beverages)  
+
+The clusters were visualized with the fviz_cluster(), clusters overlap, as they supposed to for high-dimensional data. Cluster 1 (red) indicates a strong desire for necessary commodities such as soda and rolls/buns. Cluster 2 (green) focuses on health-conscious purchases including fresh veggies and dairy. Cluster 3 (blue) represents clients who prefer beverages and quick food. Cluster 4 (purple) identifies shoppers who prioritize staple foods and fresh produce. Cluster 5 (pink) attracts customers interested in premium produce and occasional indulgences such as soda.
+ 
+Based on the analysis, we can tailor promotions to target certain groups:  
+For Cluster 1, provide discounts for soda and bottled water, bundle deals with rolls/buns, shopping bags.  
+For Cluster 2, promote healthy foods such as yogurt and tropical fruit, bundle fresh root veggies with dairy goods.  
+For Cluster 3, offer discounts on canned beer, complement advertising with bottled drinks, rolls/buns.  
+For Cluster 4, bundles dairy products (whole milk and yogurt) with fresh root vegetables.  
+For Cluster 5, combine vegetables and fruits with occasional beverages such as soda.
+
+```{r cluster}
+set.seed(547)
+#Binary matrix items vs. transactions
+cluster_matrix <- as(basket_df, "matrix")
+
+#k-means clustering
+k_means <- kmeans(cluster_matrix, centers = 5, nstart = 20)
+print(k_means)
+
+#Cluster sizes
+k_means$size
+
+#Top 5 items for each cluster
+cluster_centers <- as.data.frame(k_means$centers)
+row1 <- as.numeric(cluster_centers[1, ])
+names(row1) <- colnames(cluster_centers)
+head(sort(row1, decreasing = TRUE), 5)
+
+row2 <- as.numeric(cluster_centers[2, ])
+names(row2) <- colnames(cluster_centers)
+head(sort(row2, decreasing = TRUE), 5)
+
+row3 <- as.numeric(cluster_centers[3, ])
+names(row3) <- colnames(cluster_centers)
+head(sort(row3, decreasing = TRUE), 5)
+
+row4 <- as.numeric(cluster_centers[4, ])
+names(row4) <- colnames(cluster_centers)
+head(sort(row4, decreasing = TRUE), 5)
+
+row5 <- as.numeric(cluster_centers[5, ])
+names(row5) <- colnames(cluster_centers)
+head(sort(row5, decreasing = TRUE), 5)
+
+#Visualize the clusters
+fviz_cluster(k_means, data = cluster_matrix,
+             geom = "point", stand = FALSE,
+             ellipse.type = "convex", ggtheme = theme_minimal(),
+             main = "Cluster Analysis of Transactions")
+
+```
 
 
